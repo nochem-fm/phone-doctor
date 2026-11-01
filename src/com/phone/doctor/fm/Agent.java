@@ -727,9 +727,13 @@ final class Agent {
             try { msg = new JSONObject(s).getJSONObject("error").getString("message"); } catch (Exception ignored) { }
             String low = msg.toLowerCase();
             if (code == 429) {
-                long delay = parseDelayMs(msg);
-                boolean daily = low.contains("per day") || low.contains("perday") || delay > 300000L;
-                if (daily) { UNTIL.put(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); continue; }
+                Quota q = quota(s, msg);
+                long delay = q.delayMs;
+                if (q.daily) { UNTIL.put(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); continue; }
+                if (q.tokens) {
+                    // input-tokens-per-minute: the conversation itself is too big. Shrink it, then try again.
+                    if (compactHard()) { data = body.toString().getBytes("UTF-8"); ui.status("השיחה ארוכה, מקצר את ההקשר…"); }
+                }
                 // per-minute limit: put this model aside for a moment and switch to the next one right away
                 COOL.put(m, System.currentTimeMillis() + delay + 1000);
                 if (!retry && !hasOtherModel(m)) throw new QuotaException("חרגת ממגבלת הקצב של " + m + ". נסה שוב בעוד " + (delay / 1000 + 1) + " שניות.");
@@ -738,6 +742,12 @@ final class Agent {
                 continue;
             }
             if (code == 404) { UNTIL.put(m, System.currentTimeMillis() + 86400000L); continue; } // model removed/unavailable
+            if (code == 400 && low.contains("token") && (low.contains("exceed") || low.contains("too long") || low.contains("maximum"))) {
+                // longer than this model's context window: shrink; if that is not possible, skip this model for now
+                if (compactHard()) { data = body.toString().getBytes("UTF-8"); continue; }
+                COOL.put(m, System.currentTimeMillis() + 600000L);
+                if (hasOtherModel(m)) continue;
+            }
             if (code == 400 && sigTries < 3 && low.contains("signature")) {
                 sigTries++;
                 if (low.contains("missing")) addDummySignatures(); else stripSignatures();
@@ -824,6 +834,38 @@ final class Agent {
             lastModel = use;
         }
         return use;
+    }
+
+    static final class Quota {
+        boolean daily, tokens;
+        long delayMs;
+    }
+
+    /** Reads which free-tier quota was hit from the structured error (quotaId, retryDelay), falling back to the text. */
+    static Quota quota(String raw, String msg) {
+        Quota q = new Quota();
+        q.delayMs = parseDelayMs(msg);
+        StringBuilder ids = new StringBuilder();
+        try {
+            JSONArray det = new JSONObject(raw).getJSONObject("error").optJSONArray("details");
+            for (int i = 0; det != null && i < det.length(); i++) {
+                JSONObject d = det.getJSONObject(i);
+                JSONArray v = d.optJSONArray("violations");
+                for (int j = 0; v != null && j < v.length(); j++) ids.append(v.getJSONObject(j).optString("quotaId")).append(' ').append(v.getJSONObject(j).optString("quotaMetric")).append(' ');
+                String rd = d.optString("retryDelay", "");
+                if (rd.endsWith("s")) { try { q.delayMs = (long) (Double.parseDouble(rd.substring(0, rd.length() - 1)) * 1000); } catch (Exception ignored) { } }
+            }
+        } catch (Exception ignored) { }
+        String all = (ids + " " + msg).toLowerCase();
+        q.tokens = all.contains("token");
+        if (ids.length() > 0) {
+            String id = ids.toString().toLowerCase();
+            q.daily = id.contains("perday") && !(q.tokens && id.contains("perminute"));
+        } else {
+            q.daily = all.contains("per day") || all.contains("perday");
+        }
+        if (q.delayMs > 300000L && !q.tokens) q.daily = true;
+        return q;
     }
 
     private static long parseDelayMs(String msg) {
@@ -950,23 +992,75 @@ final class Agent {
     }
 
     /** Very long chats: shorten old tool outputs (problem, answers and actions stay intact). */
-    private void compact() {
+    /** Rough size of the context without images (≈ 4 characters per token). */
+    private int textSize() {
         try {
-            if (contents.toString().length() < 150000) return;
-            for (int i = 0; i < contents.length() - 6; i++) {
+            JSONArray c = new JSONArray(contents.toString());
+            stripImages(c, 0);
+            return c.toString().length();
+        } catch (Exception e) {
+            return contents.toString().length();
+        }
+    }
+
+    /** Replaces screenshots in entries [0, upTo) with a short note; returns how many were removed. */
+    private static int stripImages(JSONArray c, int upTo) {
+        int n = 0;
+        try {
+            int end = upTo <= 0 ? c.length() : Math.min(upTo, c.length());
+            for (int i = 0; i < end; i++) {
+                JSONArray parts = c.getJSONObject(i).optJSONArray("parts");
+                if (parts == null) continue;
+                for (int j = 0; j < parts.length(); j++)
+                    if (parts.getJSONObject(j).has("inlineData")) { parts.put(j, new JSONObject().put("text", "[old screenshot removed to save space]")); n++; }
+            }
+        } catch (Exception ignored) { }
+        return n;
+    }
+
+    /** Shortens tool outputs in entries [0, upTo). Returns true if anything changed. */
+    private boolean shorten(int upTo, int outMax, int resMax) {
+        boolean changed = false;
+        try {
+            for (int i = 0; i < Math.min(upTo, contents.length()); i++) {
                 JSONArray parts = contents.getJSONObject(i).optJSONArray("parts");
                 if (parts == null) continue;
                 for (int j = 0; j < parts.length(); j++) {
                     JSONObject fr = parts.getJSONObject(j).optJSONObject("functionResponse");
                     JSONObject r = fr == null ? null : fr.optJSONObject("response");
                     if (r == null) continue;
-                    String o = r.optString("output");
-                    if (o.length() > 600) r.put("output", o.substring(0, 600) + "\n...[shortened to save space]");
-                    String res = r.optString("result");
-                    if (res.length() > 1500) r.put("result", res.substring(0, 1500) + "\n...[shortened]");
+                    for (String k : new String[]{"output", "result"}) {
+                        String o = r.optString(k);
+                        int max = k.equals("output") ? outMax : resMax;
+                        if (o.length() > max + 40) { r.put(k, o.substring(0, max) + "\n...[shortened to save space]"); changed = true; }
+                    }
                 }
             }
         } catch (Exception ignored) { }
+        return changed;
+    }
+
+    /**
+     * Keeps every request small, so long chats do not burn the free-tier "input tokens per minute"
+     * quota of every model (which looked like "all quotas are used up" while a new chat worked).
+     * Screenshots stay only in the newest exchange; older tool outputs are shortened in steps.
+     */
+    private void compact() {
+        int n = contents.length();
+        stripImages(contents, n - 2);
+        if (textSize() < 120000) return;                 // ~30k tokens
+        shorten(n - 6, 600, 1500);
+        if (textSize() < 160000) return;
+        shorten(n - 2, 300, 600);
+    }
+
+    /** After a "too many input tokens" error: shrink hard (keeps the user's words and the answers). */
+    private boolean compactHard() {
+        int before = contents.toString().length();
+        int n = contents.length();
+        stripImages(contents, n - 1);
+        shorten(n - 1, 200, 400);
+        return contents.toString().length() < before;
     }
 
     // ================================================================ history support
