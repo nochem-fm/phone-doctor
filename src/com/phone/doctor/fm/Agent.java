@@ -62,7 +62,7 @@ final class Agent {
     final UI ui;
     boolean rootOk;
     String key = "";
-    String model = "gemini-2.5-flash";
+    String model = "gemini-2.5-flash-lite";
     volatile boolean stop;
     private volatile HttpURLConnection cur;
 
@@ -619,6 +619,10 @@ final class Agent {
             + "Before tool calls write one short Hebrew sentence about what you are checking and why. "
             + "You always have the whole conversation: remember the user's problem, what you found and what you already did; do not repeat finished checks.\n"
             + "If something cannot be fixed from here, give exact step-by-step Hebrew instructions for the user.\n"
+            + "FAILED CHECKS: a check that could not run (permission denied, command not found, empty output, error, timeout, missing root, unsupported on this Android) tells you NOTHING about the phone. "
+            + "Never conclude that the phone has a bug or a problem because a check failed, and never propose or run fixes based on a failed check. "
+            + "Say plainly in Hebrew that you could not check that part (e.g. 'לא הצלחתי לבדוק את X') and why if known, report only what you actually measured, and continue with what you can check. "
+            + "Only fix problems you actually observed with clear evidence; a general health check with no real problem found ends with a report, not with changes.\n"
             + "FINAL ANSWER (Hebrew, short, simple, non-technical): the cause, what you did, the result, what remains for the user.";
     }
 

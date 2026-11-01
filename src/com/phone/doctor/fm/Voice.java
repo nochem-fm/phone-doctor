@@ -261,9 +261,9 @@ final class Voice {
         SharedPreferences p = Core.prefs();
         String key = p.getString("key", "");
         List<String> models = new ArrayList<String>();
-        models.add(p.getString("model", "gemini-2.5-flash"));
+        models.add(p.getString("model", "gemini-2.5-flash-lite"));
         if (p.getBoolean("fb", true))
-            for (String s : p.getString("fbmodels", "").split("\n")) if (!s.trim().isEmpty() && !models.contains(s.trim())) models.add(s.trim());
+            for (String s : (p.contains("fbmodels") ? p.getString("fbmodels", "") : p.getString("models", "")).split("\n")) if (!s.trim().isEmpty() && !models.contains(s.trim())) models.add(s.trim());
         JSONObject body = new JSONObject().put("contents", new JSONArray().put(new JSONObject().put("role", "user").put("parts", new JSONArray()
             .put(new JSONObject().put("inline_data", new JSONObject().put("mime_type", "audio/aac").put("data", Base64.encodeToString(audio, Base64.NO_WRAP))))
             .put(new JSONObject().put("text", "Transcribe this recording word for word, in the language spoken (usually Hebrew). "

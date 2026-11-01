@@ -68,7 +68,7 @@ public class MainActivity extends Activity {
     boolean light;
     static final int SEND = 0xFFD96570; // same red as the title gradient
     static final int M = -1, W = -2;
-    static final String DEF_MODEL = "gemini-2.5-flash";
+    static final String DEF_MODEL = "gemini-2.5-flash-lite";
 
     SharedPreferences prefs;
     Store store;
@@ -519,6 +519,7 @@ public class MainActivity extends Activity {
     }
 
     void showSetup(boolean auto) {
+        int y = keepScroll("setup");
         onSetup = true;
         screen = "setup";
         LinearLayout col = vert();
@@ -528,12 +529,12 @@ public class MainActivity extends Activity {
         TextView h = tv("ברוך הבא", 34, TXT);
         h.setTypeface(null, Typeface.BOLD);
         grad(h);
-        TextView sub = tv("כדי לבדוק ולתקן את הטלפון אני צריך כמה הרשאות. אני מבקש אותן עכשיו אחת אחרי השנייה.", 15, DIM);
+        TextView sub = tv("כדי לבדוק ולתקן את הטלפון אני צריך כמה הרשאות. לחץ על הרשאה כדי לאשר אותה, או \"אשר הכל\" כדי לעבור על כולן.", 15, DIM);
         sub.setPadding(0, dp(8), 0, dp(24));
         col.addView(h);
         col.addView(sub);
 
-        ScrollView sv = new ScrollView(this);
+        ScrollView sv = pageScroll(y);
         LinearLayout list = vert();
         sv.addView(list);
         for (int i = 0; i < ROWS.length; i++) {
@@ -554,13 +555,14 @@ public class MainActivity extends Activity {
             r.addView(rowIcon[i]);
             r.addView(txt, lp(0, W, 1f));
             r.addView(rowSkip[i]);
+            click(r, new Runnable() { public void run() { grantOne(idx); } });
             LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(M, W);
             l.bottomMargin = dp(8);
             list.addView(r, l);
         }
         col.addView(sv, lp(M, 0, 1f));
 
-        TextView go = tv("אפשר הכל והמשך", 16, ON_ACC);
+        TextView go = tv("אשר הכל", 16, ON_ACC);
         go.setTypeface(null, Typeface.BOLD);
         go.setGravity(Gravity.CENTER);
         go.setBackground(rr(ACC, 28));
@@ -572,7 +574,7 @@ public class MainActivity extends Activity {
                 nextStep();
             }
         });
-        TextView skip = tv("המשך בלי הכל", 14, DIM);
+        TextView skip = tv("המשך", 14, DIM);
         skip.setGravity(Gravity.CENTER);
         skip.setPadding(0, dp(16), 0, dp(4));
         click(skip, new Runnable() { public void run() { finishSetup(); } });
@@ -582,11 +584,71 @@ public class MainActivity extends Activity {
         col.addView(skip, new LinearLayout.LayoutParams(M, W));
         show(col);
         refreshRows();
-        if (auto) {
-            flowActive = true;
-            tried.clear();
-            col.post(new Runnable() { public void run() { nextStep(); } });
+    }
+
+    /** One permission at a time. With root it is granted silently; without root its own system screen opens. */
+    void grantOne(final int i) {
+        if (flowActive) return;
+        Uri u = Uri.parse("package:" + getPackageName());
+        final String pkg = getPackageName();
+        String sh = null;
+        Intent it = null;
+        switch (i) {
+            case 0:
+                if (rootOk) { toast("root כבר פעיל"); return; }
+                doRoot();
+                return;
+            case 1: {
+                List<String> m = missingRuntime();
+                if (m.isEmpty()) { toast("כבר ניתן"); return; }
+                if (rootOk) { StringBuilder b = new StringBuilder(); for (String x : m) b.append("pm grant ").append(pkg).append(' ').append(x).append(" 2>/dev/null;"); sh = b.toString(); }
+                else if (Build.VERSION.SDK_INT >= 23) { requestPermissions(m.toArray(new String[0]), 7); return; }
+                break;
+            }
+            case 2: if (filesOk()) { toast("כבר ניתן"); return; } if (rootOk) sh = "appops set " + pkg + " MANAGE_EXTERNAL_STORAGE allow"; else it = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, u); break;
+            case 3: if (hasUsage()) { toast("כבר ניתן"); return; } if (rootOk) sh = "appops set " + pkg + " GET_USAGE_STATS allow"; else it = new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, u); break;
+            case 4: if (overlayOk()) { toast("כבר ניתן"); return; } if (rootOk) sh = "appops set " + pkg + " SYSTEM_ALERT_WINDOW allow"; else it = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, u); break;
+            case 5: if (batteryOk()) { toast("כבר ניתן"); return; } if (rootOk) sh = "dumpsys deviceidle whitelist +" + pkg; else it = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, u); break;
+            case 6:
+                if (isAccessOn()) { toast("כבר פעיל"); return; }
+                if (!canWriteSecure() && rootOk) sh = "pm grant " + pkg + " android.permission.WRITE_SECURE_SETTINGS";
+                else if (canWriteSecure()) { enableAccessibility(); refreshLater(); return; }
+                else {
+                    toast("הפעל את Phone Doctor ברשימת שירותי הנגישות. אם האפשרות אפורה: מידע על האפליקציה > ⋮ > אפשר הגדרות מוגבלות");
+                    it = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                }
+                break;
+            case 7:
+                if (!assistSupported()) { toast("נתמך מאנדרואיד 6 ומעלה"); return; }
+                if (isAssistant()) { toast("כבר מוגדר"); return; }
+                if (setAssistantRoot(new Runnable() { public void run() { refreshRows(); } })) return;
+                openAssistSettings();
+                return;
         }
+        if (it != null) {
+            try { startActivity(it); } catch (Exception e) { toast("המסך הזה לא קיים במכשיר"); }
+            return;
+        }
+        if (sh != null) {
+            final String cmd = sh;
+            final boolean thenAccess = i == 6;
+            new Thread(new Runnable() {
+                public void run() {
+                    Shell.run(cmd, true, 30);
+                    runOnUiThread(new Runnable() {
+                        public void run() {
+                            if (thenAccess && canWriteSecure()) enableAccessibility();
+                            refreshLater();
+                        }
+                    });
+                }
+            }).start();
+        }
+    }
+
+    void refreshLater() {
+        refreshRows();
+        if (rowIcon[0] != null) rowIcon[0].postDelayed(new Runnable() { public void run() { refreshRows(); } }, 800);
     }
 
     List<String> missingRuntime() {
@@ -696,9 +758,11 @@ public class MainActivity extends Activity {
                 if (tryStep("access", false, new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))) return;
             }
         }
-        if (!skipped.contains("7") && assistSupported() && !isAssistant()) {
-            if (canWriteSecure()) setAssistant();
-            else if (tryStep("assist", false, assistIntent())) return;
+        if (!skipped.contains("7") && assistSupported() && !isAssistant() && tried.add("assist")) {
+            if (setAssistantRoot(new Runnable() { public void run() { nextStep(); } })) return;
+            waiting = true;
+            openAssistSettings();
+            return;
         }
         finishSetup();
     }
@@ -711,9 +775,6 @@ public class MainActivity extends Activity {
             "pm grant " + p + " android.permission.WRITE_SECURE_SETTINGS",
             "pm grant " + p + " android.permission.DUMP",
             "pm grant " + p + " android.permission.READ_LOGS",
-            "appops set " + p + " GET_USAGE_STATS allow",
-            "appops set " + p + " SYSTEM_ALERT_WINDOW allow",
-            "dpm set-active-admin " + p + "/.AdminReceiver",
             "dpm set-device-owner " + p + "/.AdminReceiver"};
     }
 
@@ -723,9 +784,6 @@ public class MainActivity extends Activity {
             "מאפשר לאפליקציה להפעיל לבד את שירות הנגישות והעוזר הדיגיטלי",
             "מאפשר קריאת נתוני מערכת (dumpsys) לאבחון מדויק",
             "מאפשר קריאת לוגים (logcat) כדי לאתר קריסות ושגיאות",
-            "נותן גישה לנתוני שימוש באפליקציות: מי צורך משאבים",
-            "מאפשר להציג חלונות אישור ולחזור לחזית מעל אפליקציות אחרות",
-            "מגדיר מנהל מכשיר פעיל: הרשאות מוגבלות, קל להסרה",
             "מגדיר Device Owner: נותן ושולל הרשאות לכל אפליקציה בלי root. עובד רק כשאין חשבונות במכשיר"};
     }
 
@@ -735,9 +793,6 @@ public class MainActivity extends Activity {
             canWriteSecure(),
             has("android.permission.DUMP"),
             has("android.permission.READ_LOGS"),
-            hasUsage(),
-            overlayOk(),
-            isAdminActive() || isDeviceOwner(),
             isDeviceOwner()};
     }
 
@@ -872,7 +927,14 @@ public class MainActivity extends Activity {
 
     void setupAdmin() {
         if (isDeviceOwner()) { toast("האפליקציה כבר מנהל מכשיר (Device Owner)"); return; }
-        if (!rootOk) { adbOpen = true; toast("אין root. פתחתי את רשימת פקודות ה-ADB: העתק את הפקודה האחרונה והרץ אותה מהמחשב"); showSettings(); return; }
+        if (!rootOk) {
+            if (isAdminActive()) { adbOpen = true; toast("מנהל המכשיר פעיל. ל-Device Owner (יכולות מלאות) הרץ את פקודת ה-ADB מהמחשב"); showSettings(); return; }
+            Intent i = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+            i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, new ComponentName(this, AdminReceiver.class));
+            i.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Phone Doctor: הפעלת מנהל מכשיר. ליכולות מלאות (מתן הרשאות לאפליקציות) צריך Device Owner דרך ADB.");
+            try { startActivity(i); } catch (Exception e) { toast("לא נפתח מסך מנהל המכשיר. הפעל ידנית: הגדרות > אבטחה > אפליקציות מנהל מכשיר"); }
+            return;
+        }
         final String comp = getPackageName() + "/.AdminReceiver";
         toast("מגדיר מנהל מכשיר…");
         new Thread(new Runnable() {
@@ -894,17 +956,15 @@ public class MainActivity extends Activity {
 
     void requestRootNow() {
         toast("מבקש root…");
-        final String script = grantScript();
         new Thread(new Runnable() {
             public void run() {
                 Shell.Result r = Shell.run("id", true, 45);
                 final boolean ok = r.exit == 0 && r.out.contains("uid=0");
-                if (ok && !script.isEmpty()) Shell.run(script, true, 60);
                 runOnUiThread(new Runnable() {
                     public void run() {
                         rootOk = ok;
                         prefs.edit().putBoolean("root", ok).apply();
-                        toast(ok ? "root אושר וההרשאות הוענקו" : "root לא אושר");
+                        toast(ok ? "root אושר" : "root לא אושר");
                         showSettings();
                     }
                 });
@@ -941,7 +1001,51 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT >= 29 && Compat.roleAvailable(this)) return Compat.roleHeld(this);
         } catch (Exception ignored) { }
         String a = Settings.Secure.getString(getContentResolver(), "assistant");
-        return a != null && a.startsWith(getPackageName() + "/");
+        String v = Settings.Secure.getString(getContentResolver(), "voice_interaction_service");
+        return (a != null && a.startsWith(getPackageName() + "/")) || (v != null && v.startsWith(getPackageName() + "/"));
+    }
+
+    /**
+     * Makes Phone Doctor the digital assistant the way the system itself does it. On Android 10+ the
+     * system screen reads the ASSISTANT role, so writing only the settings left it showing "none".
+     * Needs root (role command). Returns false when it could not be done silently.
+     */
+    boolean setAssistantRoot(Runnable after) {
+        if (!rootOk && !canWriteSecure()) return false;
+        if (Build.VERSION.SDK_INT >= 29 && !rootOk) return false;   // the role can only be changed by the system shell
+        final String pkg = getPackageName();
+        final String comp = pkg + "/" + AssistService.class.getName();
+        final String rec = pkg + "/" + StubRecognizer.class.getName();
+        final Runnable done = after;
+        new Thread(new Runnable() {
+            public void run() {
+                if (rootOk) {
+                    String sh = (Build.VERSION.SDK_INT >= 29 ? "cmd role add-role-holder --user 0 android.app.role.ASSISTANT " + pkg + " 2>&1;" : "")
+                        + "settings put secure assistant " + comp + ";"
+                        + "settings put secure voice_interaction_service " + comp + ";"
+                        + "settings put secure voice_recognition_service " + rec + ";";
+                    Shell.run(sh, true, 30);
+                } else {
+                    setAssistant();
+                }
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        toast(isAssistant() ? "הוגדר כעוזר הדיגיטלי" : "לא הצלחתי להגדיר. בחר את Phone Doctor במסך העוזר הדיגיטלי");
+                        if (!isAssistant()) openAssistSettings();
+                        if (done != null) done.run();
+                    }
+                });
+            }
+        }).start();
+        return true;
+    }
+
+    void openAssistSettings() {
+        String[] acts = {Settings.ACTION_VOICE_INPUT_SETTINGS, "android.settings.MANAGE_DEFAULT_APPS_SETTINGS", Settings.ACTION_SETTINGS};
+        toast("בחר \"Phone Doctor\" תחת \"אפליקציית עוזר דיגיטלי\"");
+        for (String a : acts) {
+            try { startActivity(new Intent(a)); return; } catch (Exception ignored) { }
+        }
     }
 
     void setAssistant() {
@@ -955,11 +1059,7 @@ public class MainActivity extends Activity {
     }
 
     Intent assistIntent() {
-        if (Build.VERSION.SDK_INT >= 29) {
-            Intent r = Compat.roleIntent(this);
-            if (r != null) return r;
-        }
-        return new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS);
+        return new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS);   // the assistant role cannot be requested by apps
     }
 
     void doRoot() {
@@ -970,7 +1070,7 @@ public class MainActivity extends Activity {
             public void run() {
                 Shell.Result r = Shell.run("id", true, 45);
                 rootOk = r.exit == 0 && r.out.contains("uid=0");
-                if (rootOk) {
+                if (rootOk && flowActive) {   // permissions are granted automatically only after "approve all"
                     runOnUiThread(new Runnable() {
                         public void run() { rootBusy = "מעניק הרשאות…"; refreshRows(); }
                     });
@@ -981,7 +1081,7 @@ public class MainActivity extends Activity {
                         rootBusy = rootOk ? null : "Root לא זמין. אפשר להמשיך, אבל חלק מהבדיקות לא יעבדו";
                         prefs.edit().putBoolean("root", rootOk).apply();
                         refreshRows();
-                        nextStep();
+                        if (flowActive) nextStep();
                     }
                 });
             }
@@ -1069,7 +1169,7 @@ public class MainActivity extends Activity {
         q.setPadding(0, 0, 0, dp(24));
         g.addView(hi);
         g.addView(q);
-        String[] chips = {"אפליקציה מסוימת לא עובדת, בוא נבדוק", "הרשאה לא נתפסת לאפליקציה",
+        String[] chips = {"כמה צריכת ה-RAM הנוכחית?", "כמה זמן המכשיר דלוק?",
                 "בדיקת בריאות כללית לטלפון", "למה הסוללה מתרוקנת מהר?"};
         for (final String c : chips) {
             TextView t = tv(c, 15, TXT);
@@ -1534,12 +1634,13 @@ public class MainActivity extends Activity {
     }
 
     void showJournal() {
+        int y = keepScroll("journal");
         screen = "journal";
         onSetup = false;
         LinearLayout col = vert();
         col.setBackgroundColor(BG);
         col.addView(topBar("יומן שינויים"));
-        ScrollView sv = new ScrollView(this);
+        ScrollView sv = pageScroll(y);
         LinearLayout list = vert();
         list.setPadding(dp(16), dp(8), dp(16), dp(24));
         sv.addView(list);
@@ -1748,7 +1849,9 @@ public class MainActivity extends Activity {
                     final List<String> m = Models.fetch(key);
                     StringBuilder sb = new StringBuilder();
                     for (String s : m) sb.append(s).append('\n');
-                    prefs.edit().putString("models", sb.toString().trim()).apply();
+                    SharedPreferences.Editor ed = prefs.edit().putString("models", sb.toString().trim());
+                    if (!prefs.contains("fbmodels")) ed.putString("fbmodels", sb.toString().trim());   // default: every model is a backup
+                    ed.apply();
                     runOnUiThread(new Runnable() { public void run() { cb.got(m); } });
                 } catch (final Exception e) {
                     runOnUiThread(new Runnable() {
@@ -1783,7 +1886,8 @@ public class MainActivity extends Activity {
                 final String[] arr = models.toArray(new String[0]);
                 final boolean[] chk = new boolean[arr.length];
                 List<String> cur = fbModels();
-                for (int i = 0; i < arr.length; i++) chk[i] = cur.contains(arr[i]);
+                boolean never = !prefs.contains("fbmodels");
+                for (int i = 0; i < arr.length; i++) chk[i] = never || cur.contains(arr[i]);
                 new AlertDialog.Builder(MainActivity.this, dlg())
                     .setTitle("מודלי גיבוי (לפי הסדר מהרשימה)")
                     .setMultiChoiceItems(arr, chk, new DialogInterface.OnMultiChoiceClickListener() {
@@ -1884,13 +1988,31 @@ public class MainActivity extends Activity {
         });
     }
 
+    ScrollView pageSv;
+
+    /** Rebuilding a screen must not jump back to the top: remember where the user was. */
+    int keepScroll(String name) {
+        return screen.equals(name) && pageSv != null ? pageSv.getScrollY() : 0;
+    }
+
+    ScrollView pageScroll(final int y) {
+        final ScrollView sv = new ScrollView(this);
+        sv.setDescendantFocusability(android.view.ViewGroup.FOCUS_BEFORE_DESCENDANTS);
+        sv.setFocusable(true);
+        sv.setFocusableInTouchMode(true);   // the scroll view takes focus, not the first text field
+        pageSv = sv;
+        if (y > 0) sv.post(new Runnable() { public void run() { sv.scrollTo(0, y); } });
+        return sv;
+    }
+
     void showSettings() {
+        int y = keepScroll("settings");
         screen = "settings";
         onSetup = false;
         LinearLayout col = vert();
         col.setBackgroundColor(BG);
         col.addView(topBar("הגדרות"));
-        ScrollView sv = new ScrollView(this);
+        ScrollView sv = pageScroll(y);
         LinearLayout list = vert();
         list.setPadding(dp(16), dp(8), dp(16), dp(24));
         sv.addView(list);
@@ -1967,8 +2089,6 @@ public class MainActivity extends Activity {
         c = card(list, "התנהגות הסוכן");
         c.addView(sw("מצב אוטונומי: תיקונים רגילים בלי לשאול", prefs.getBoolean("auto", false), "auto"));
         c.addView(note("פעולות מסוכנות (מחיקה, הסרת אפליקציות, setprop, iptables ועוד) תמיד דורשות אישור."));
-        c.addView(sw("רק נושאי טלפון: לא לענות על נושאים אחרים", prefs.getBoolean("scope", true), "scope"));
-        c.addView(note("כשמופעל, הסוכן עונה רק על בעיות בטלפון, באפליקציות, בהגדרות ובקבצים (כולל קבצים שלא נפתחים או פגומים), ומסרב בנימוס לכל נושא אחר."));
 
         // --- screen access without root
         c = card(list, "גישה למסך בלי root");
@@ -1983,9 +2103,9 @@ public class MainActivity extends Activity {
         c.addView(row("עוזר דיגיטלי (לחיצה ארוכה על Home)", !assistSupported() ? "לא נתמך" : isAssistant() ? "פעיל" : "כבוי", new Runnable() {
             public void run() {
                 if (!assistSupported()) { toast("עוזר דיגיטלי נתמך מאנדרואיד 6 ומעלה"); return; }
-                if (canWriteSecure()) { setAssistant(); toast("הוגדר כעוזר הדיגיטלי"); showSettings(); return; }
-                try { startActivity(assistIntent()); }
-                catch (Exception e) { try { startActivity(new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)); } catch (Exception ignored) { } }
+                if (isAssistant()) { openAssistSettings(); return; }
+                if (setAssistantRoot(new Runnable() { public void run() { showSettings(); } })) return;
+                openAssistSettings();
             }
         }));
         c.addView(note("בעזרת שני אלה הסוכן רואה ומצלם את המסך גם בלי root, ובלחיצה ארוכה על Home הוא מקבל צילום של האפליקציה שבה אתה נמצא."));
@@ -1995,11 +2115,8 @@ public class MainActivity extends Activity {
         // --- permissions
         c = card(list, "הרשאות מתקדמות");
         c.addView(row("Root", rootOk ? "פעיל" : "לא אושר", new Runnable() { public void run() { requestRootNow(); } }));
-        c.addView(note(suPresent() ? "לחיצה מבקשת root (Magisk) ומעניקה לאפליקציה את כל ההרשאות."
+        c.addView(note(suPresent() ? "לחיצה מבקשת root (Magisk). ההרשאות לא ניתנות אוטומטית: כל אחת מאשרים בנפרד, או ב\"אשר הכל\" במסך ההרשאות."
             : "לא זוהה Magisk במכשיר. אם יש לך root מוסתר, לחיצה תנסה בכל זאת."));
-        c.addView(row("הרשאות מיוחדות (WRITE_SECURE_SETTINGS)", canWriteSecure() ? "\u2713 ניתן" : "\u2717 חסר", new Runnable() {
-            public void run() { adbOpen = true; showSettings(); }
-        }));
         c.addView(row("מנהל מכשיר", isDeviceOwner() ? "\u2713 Device Owner" : isAdminActive() ? "\u2713 מנהל פעיל" : "\u2717 כבוי", new Runnable() { public void run() { setupAdmin(); } }));
         if (isDeviceOwner() || isAdminActive()) {
             c.addView(row("הסר מנהל מכשיר", "", new Runnable() {
@@ -2012,8 +2129,8 @@ public class MainActivity extends Activity {
             }));
         }
         c.addView(adbBlock());
-        c.addView(note("חבר את הטלפון למחשב עם ניפוי באגים והרץ את הפקודות. Device Owner עובד רק כשאין חשבונות מוגדרים במכשיר (אחרת השתמש ב-set-active-admin). "
-            + "כמנהל מכשיר הסוכן יכול לתת ולשלול הרשאות לכל אפליקציה בלי root."));
+        c.addView(note("חבר את הטלפון למחשב עם ניפוי באגים והרץ את הפקודות. Device Owner אפשר להגדיר רק דרך ADB (או root), ורק כשאין חשבונות מוגדרים במכשיר. "
+            + "רק כ-Device Owner הסוכן יכול לתת ולשלול הרשאות לכל אפליקציה, להסתיר ולהשעות אפליקציות בלי root. מנהל מכשיר רגיל (מההגדרות) לא נותן לו את היכולות האלה."));
         c.addView(row("הגדרת כל ההרשאות מחדש", "", new Runnable() {
             public void run() {
                 skipped.clear();
@@ -2049,7 +2166,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 3.1", 12, DIM);
+        TextView about = tv("Phone Doctor 3.2", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);

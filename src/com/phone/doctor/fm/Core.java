@@ -97,15 +97,17 @@ final class Core {
         boolean free = p.getBoolean("free", true);
         agent.rootOk = p.getBoolean("root", false);
         agent.key = p.getString("key", "");
-        agent.model = p.getString("model", "gemini-2.5-flash");
+        agent.model = p.getString("model", "gemini-2.5-flash-lite");
         agent.retry = free;
         agent.rpm = free ? p.getInt("rpm", 5) : 0;
         agent.fallbackOn = p.getBoolean("fb", true);
         List<String> fb = new ArrayList<String>();
-        for (String s : p.getString("fbmodels", "").split("\n")) if (!s.trim().isEmpty()) fb.add(s.trim());
+        // default (never edited): every model the key can use is a backup
+        String fbs = p.contains("fbmodels") ? p.getString("fbmodels", "") : p.getString("models", "");
+        for (String s : fbs.split("\n")) if (!s.trim().isEmpty()) fb.add(s.trim());
         agent.fallbacks = fb;
         agent.auto = p.getBoolean("auto", false);
-        agent.scoped = p.getBoolean("scope", true);
+        agent.scoped = true;   // locked: phone topics only
         agent.cacheDir = app.getCacheDir().getAbsolutePath();
         agent.stop = false;
         Shell.cancel = false;
