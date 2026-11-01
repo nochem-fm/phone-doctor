@@ -98,7 +98,8 @@ public class MainActivity extends Activity {
     ScrollView scroll;
     View greeting;
     EditText input;
-    TextView sendBtn, queueBtn, micBtn, liveHead;
+    TextView sendBtn, queueBtn, liveHead;
+    Glyph micBtn;
     Voice voice;
     String micPrefix = "";
     LinearLayout liveBody;
@@ -1135,11 +1136,10 @@ public class MainActivity extends Activity {
             public void afterTextChanged(Editable e) { }
         });
         pill.addView(input, lp(0, W, 1f));
-        micBtn = tv("\uD83C\uDFA4", 18, TXT);
-        micBtn.setGravity(Gravity.CENTER);
+        micBtn = new Glyph(this, Glyph.MIC, TXT, dp(40));
         click(micBtn, new Runnable() { public void run() { onMic(); } });
         LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(dp(40), dp(40));
-        ml.setMarginEnd(dp(4));
+        ml.setMarginEnd(dp(6));
         pill.addView(micBtn, ml);
         micState(voice == null ? Voice.IDLE : voice.state());
         LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(dp(44), dp(44));
@@ -1227,9 +1227,9 @@ public class MainActivity extends Activity {
     void micState(int st) {
         if (micBtn == null) return;
         boolean active = st == Voice.LISTEN || st == Voice.RECORD;
-        micBtn.setBackground(active ? rr(ERR, 20) : null);
-        micBtn.setText(st == Voice.WORKING ? "\u2026" : "\uD83C\uDFA4");
-        micBtn.setAlpha(st == Voice.WORKING ? 0.6f : 1f);
+        micBtn.setBackground(rr(active ? ERR : SURF2, 20));
+        micBtn.setColor(active ? 0xFFFFFFFF : TXT);
+        micBtn.setAlpha(st == Voice.WORKING ? 0.45f : 1f);
         if (input != null && st == Voice.LISTEN) input.setHint("מקשיב… דבר עכשיו");
         else if (input != null && st == Voice.RECORD) input.setHint("מקליט… לחץ 🎤 לסיום");
         else if (input != null && st == Voice.WORKING) input.setHint("מתמלל דרך Gemini…");
@@ -2041,7 +2041,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 2.9", 12, DIM);
+        TextView about = tv("Phone Doctor 3.0", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
