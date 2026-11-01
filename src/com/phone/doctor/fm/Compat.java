@@ -25,6 +25,10 @@ final class Compat {
         am.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, when, p);
     }
 
+    static String channelOf(Notification n) { return n.getChannelId(); }
+
+    static boolean allFiles() { return android.os.Environment.isExternalStorageManager(); }
+
     static int immutable() {
         return Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
     }

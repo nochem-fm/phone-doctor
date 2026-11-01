@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.phone.doctor.fm"
-    android:versionCode="42"
-    android:versionName="4.2">
+    android:versionCode="43"
+    android:versionName="4.3">
 
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="33" />
 
@@ -63,6 +63,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- notification history (metadata only) -->
+        <service
+            android:name=".NotifyService"
+            android:exported="true"
+            android:label="Phone Doctor"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- follow-up checks the agent scheduled, background monitoring, re-arming after reboot -->
         <receiver android:name=".Background" android:exported="false">

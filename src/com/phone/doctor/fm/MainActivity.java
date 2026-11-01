@@ -1903,6 +1903,25 @@ public class MainActivity extends Activity {
         final Core.Pending p = Core.pending;
         if (p == null || p.shown) return;
         p.shown = true;
+        if (p.options != null) {   // ask_user: one button per option
+            pendingDlg = new AlertDialog.Builder(this, dlg()).setTitle(p.purpose).setCancelable(false)
+                .setItems(p.options, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        p.answer = p.options[w];
+                        pendingDlg = null;
+                        Core.pending = null;
+                        p.latch.countDown();
+                    }
+                })
+                .setNegativeButton("סגור בלי לבחור", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        pendingDlg = null;
+                        Core.pending = null;
+                        p.latch.countDown();
+                    }
+                }).show();
+            return;
+        }
         String rl = p.risk.equals("dangerous") ? "\u26A0 פעולה מסוכנת" : "שינוי במערכת";
         String msg = p.purpose + "\n\n" + rl + (p.root ? " \u00B7 root" : "") + "\n\n" + p.cmd;
         pendingDlg = new AlertDialog.Builder(this, dlg()).setTitle("נדרש אישור").setMessage(msg).setCancelable(false)
@@ -2290,6 +2309,39 @@ public class MainActivity extends Activity {
         });
         c.addView(watchSw);
         c.addView(note("כל כמה שעות, בלי AI ובלי מכסה: אחסון כמעט מלא, סוללה שיורדת מהר, אפליקציה שקורסת שוב ושוב (דורש root או הרשאת DUMP). התראה רק כשנמצאה בעיה."));
+        c.addView(row("גישה להתראות (היסטוריית התראות)", NotifyService.enabled(this) ? "פעיל" : "כבוי", new Runnable() {
+            public void run() {
+                if (NotifyService.enabled(MainActivity.this)) { toast("כבר פעיל"); return; }
+                if (rootOk && Build.VERSION.SDK_INT >= 23) {
+                    new Thread(new Runnable() {
+                        public void run() {
+                            Shell.run("cmd notification allow_listener " + NotifyService.component(MainActivity.this), true, 15);
+                            runOnUiThread(new Runnable() { public void run() { showSettings(); toast(NotifyService.enabled(MainActivity.this) ? "הופעל" : "לא הצלחתי. הפעל ידנית"); } });
+                        }
+                    }).start();
+                    return;
+                }
+                toast("הפעל את Phone Doctor ברשימה");
+                try { startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")); } catch (Exception e) { toast("המסך לא נמצא במכשיר"); }
+            }
+        }));
+        c.addView(note("נשמרים רק אפליקציה ושעה, בלי תוכן ההתראה. כך הסוכן יודע אם התראה בכלל הגיעה."));
+        final long bkKb = AppBackup.totalKb(this);
+        c.addView(row("גיבויי אפליקציות", bkKb > 0 ? (bkKb / 1024) + " MB" : "אין", new Runnable() {
+            public void run() {
+                String l = AppBackup.list(MainActivity.this, "");
+                AlertDialog.Builder b = new AlertDialog.Builder(MainActivity.this, dlg()).setTitle("גיבויי אפליקציות").setMessage(l).setPositiveButton("סגור", null);
+                if (bkKb > 0) b.setNeutralButton("מחק הכל", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        new Thread(new Runnable() { public void run() {
+                            AppBackup.deleteAll(MainActivity.this, rootOk);
+                            runOnUiThread(new Runnable() { public void run() { toast("הגיבויים נמחקו"); showSettings(); } });
+                        } }).start();
+                    }
+                });
+                b.show();
+            }
+        }));
 
         c = card(list, "יומן שגיאות Gemini");
         c.addView(row("שגיאות שמורות", String.valueOf(ErrorLog.count()), new Runnable() { public void run() { showErrors(); } }));

@@ -38,6 +38,8 @@ final class Core {
     static final class Pending {
         String purpose, cmd, risk;
         boolean root, ok, shown;
+        String[] options;      // set: this is a question with buttons (ask_user), not an approval
+        String answer;
         final CountDownLatch latch = new CountDownLatch(1);
     }
 
@@ -94,6 +96,20 @@ final class Core {
     static void send(String text) {
         SharedPreferences p = prefs();
         ensureAgent();
+        if (assistB64 == null && (assistText == null || assistText.isEmpty())) {
+            String local = null;
+            try { local = LocalAnswers.answer(app, text); } catch (Exception ignored) { }
+            if (local != null) {   // simple factual question: answered on the phone, no request, no quota
+                if (curId == null) curId = String.valueOf(System.currentTimeMillis());
+                add(entry("u", text));
+                lastReply = local;
+                add(entry("a", local));
+                agent.note(text, local);
+                saveChat();
+                if (ui != null) ui.onFinished();
+                return;
+            }
+        }
         boolean free = p.getBoolean("free", true);
         agent.rootOk = p.getBoolean("root", false);
         agent.key = p.getString("key", "");
@@ -240,6 +256,19 @@ final class Core {
                 }
             }
             H.post(new Runnable() { public void run() { if (ui != null) ui.onStatus(); } });
+        }
+
+        public String choose(String question, String[] options) {
+            Pending p = new Pending();
+            p.purpose = question;
+            p.cmd = "";
+            p.risk = "";
+            p.options = options;
+            pending = p;
+            H.post(new Runnable() { public void run() { onPending(); } });
+            try { p.latch.await(15, TimeUnit.MINUTES); } catch (InterruptedException ignored) { }
+            pending = null;
+            return p.answer;
         }
 
         public boolean confirm(String purpose, String cmd, boolean root, String risk) {
