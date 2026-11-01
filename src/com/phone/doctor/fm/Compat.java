@@ -20,6 +20,11 @@ import java.util.function.Consumer;
 
 /** Everything that needs a newer Android class lives here, so older devices (down to 4.4) never load it. */
 final class Compat {
+    /** Android 6+: the alarm also fires in Doze (inexact, no special permission needed). */
+    static void alarmIdle(android.app.AlarmManager am, long when, PendingIntent p) {
+        am.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, when, p);
+    }
+
     static int immutable() {
         return Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
     }

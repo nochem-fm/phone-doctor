@@ -165,6 +165,16 @@ public class MainActivity extends Activity {
                 try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); } catch (Exception ignored) { }
             }
         }
+        if (i != null && i.hasExtra("prefill") && prefs.getBoolean("setup", false)) {
+            final String pre = i.getStringExtra("prefill");
+            i.removeExtra("prefill");
+            if (!screen.equals("chat")) showChat();
+            if (input != null && pre != null) {
+                input.setText(pre);
+                input.setSelection(input.getText().length());
+                toast("התוצאות מוכנות בשורה. לחץ שליחה כדי שהסוכן ינתח אותן");
+            }
+        }
         if (i != null && i.getBooleanExtra("assist", false) && prefs.getBoolean("setup", false)) {
             i.removeExtra("assist");
             showChat();
@@ -1710,6 +1720,20 @@ public class MainActivity extends Activity {
         show(col);
     }
 
+    void showMemory() {
+        final String[] facts = Memory.items("fact"), recipes = Memory.items("recipe");
+        StringBuilder sb = new StringBuilder();
+        if (facts.length == 0 && recipes.length == 0) sb.append("הזיכרון ריק. הסוכן ימלא אותו תוך כדי עבודה.");
+        if (facts.length > 0) { sb.append("עובדות על המכשיר:\n"); for (String f : facts) sb.append("• ").append(f).append('\n'); }
+        if (recipes.length > 0) { sb.append("\nתיקונים שעבדו:\n"); for (String r : recipes) sb.append("• ").append(r).append('\n'); }
+        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg()).setTitle("זיכרון המכשיר").setMessage(sb.toString().trim())
+            .setPositiveButton("סגור", null);
+        if (facts.length + recipes.length > 0) b.setNeutralButton("מחק הכל", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int w) { Memory.clear(); toast("הזיכרון נמחק"); showSettings(); }
+        });
+        b.show();
+    }
+
     // ================================================================= share report
 
     /** The current chat as a tidy text report (problem, steps with commands, answers) for a forum or a technician. */
@@ -2219,6 +2243,24 @@ public class MainActivity extends Activity {
             }
         }));
         c.addView(note("פלט הבדיקות וצילומי המסך נשלחים ל-Gemini לניתוח."));
+
+        c = card(list, "זיכרון ומעקב");
+        c.addView(row("זיכרון המכשיר", Memory.count("fact") + " עובדות, " + Memory.count("recipe") + " תיקונים", new Runnable() { public void run() { showMemory(); } }));
+        c.addView(note("מה שהסוכן למד על הטלפון הזה ותיקונים שעבדו. הוא משתמש בזה בכל שיחה חדשה. לא נשמר מידע אישי."));
+        Switch watchSw = new Switch(this);
+        watchSw.setText("מעקב ברקע: התראה כשמשהו לא תקין");
+        watchSw.setTextColor(TXT);
+        watchSw.setTextSize(14);
+        watchSw.setChecked(prefs.getBoolean("watch", false));
+        watchSw.setPadding(0, dp(8), 0, dp(8));
+        watchSw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton b, boolean v) {
+                Background.setWatch(MainActivity.this, v);
+                toast(v ? "המעקב פעיל: בדיקה כל כמה שעות, בלי שימוש במכסה" : "המעקב כבוי");
+            }
+        });
+        c.addView(watchSw);
+        c.addView(note("כל כמה שעות, בלי AI ובלי מכסה: אחסון כמעט מלא, סוללה שיורדת מהר, אפליקציה שקורסת שוב ושוב (דורש root או הרשאת DUMP). התראה רק כשנמצאה בעיה."));
 
         c = card(list, "יומן שינויים");
         int ac = Journal.activeCount();
