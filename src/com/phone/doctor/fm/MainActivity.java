@@ -352,19 +352,23 @@ public class MainActivity extends Activity {
         onSetup = false;
         LinearLayout col = vert();
         col.setBackgroundColor(BG);
-        col.setPadding(dp(20), dp(36), dp(20), dp(16));
+        boolean small = getResources().getConfiguration().screenHeightDp < 600;
+        col.setPadding(dp(16), dp(small ? 8 : 20), dp(16), dp(small ? 6 : 12));
 
-        TextView warn = tv("\u26A0", 40, ERR);
-        warn.setGravity(Gravity.CENTER);
-        TextView title = tv("אזהרה: האפליקציה הזו מסוכנת", 24, ERR);
+        // header scrolls together with the text, so on small screens the text gets the room
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER);
+        TextView warn = tv("\u26A0", small ? 22 : 30, ERR);
+        warn.setPadding(0, 0, 0, 0);
+        TextView title = tv("אזהרה: האפליקציה הזו מסוכנת", small ? 17 : 21, ERR);
         title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
-        TextView sub = tv("קרא בעיון לפני שימוש. המשך מהווה הסכמה לכל האמור כאן.", 14, DIM);
+        head.addView(warn);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(W, W);
+        tl.setMarginStart(dp(8));
+        head.addView(title, tl);
+        TextView sub = tv("קרא בעיון לפני שימוש. המשך מהווה הסכמה לכל האמור כאן.", 13, DIM);
         sub.setGravity(Gravity.CENTER);
-        sub.setPadding(0, dp(4), 0, dp(12));
-        col.addView(warn);
-        col.addView(title);
-        col.addView(sub);
+        sub.setPadding(0, dp(4), 0, dp(10));
 
         String[][] items = {
             {"השימוש באחריותך בלבד", "השימוש באפליקציה הוא באחריות המשתמש בלבד. המפתח (@נוחעם-FM), כל מי שהשתתף בפיתוח ובהפצה ומי שמפיץ אותה, אינם לוקחים כל אחריות לנזק, אובדן מידע, תקלה, עלות או תוצאה כלשהי, ישירה או עקיפה, ולא יהיו חייבים בפיצוי. האפליקציה ניתנת כפי שהיא (AS IS), ללא אחריות מכל סוג."},
@@ -376,6 +380,8 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         LinearLayout list = vert();
         sv.addView(list);
+        list.addView(head, new LinearLayout.LayoutParams(M, W));
+        list.addView(sub, new LinearLayout.LayoutParams(M, W));
         for (String[] it : items) {
             LinearLayout c = vert();
             c.setBackground(rr(SURF, 16));
@@ -402,20 +408,21 @@ public class MainActivity extends Activity {
             close.setTypeface(null, Typeface.BOLD);
             close.setGravity(Gravity.CENTER);
             close.setBackground(rr(ACC, 28));
-            close.setPadding(0, dp(14), 0, dp(14));
+            close.setPadding(0, dp(small ? 9 : 12), 0, dp(small ? 9 : 12));
             click(close, new Runnable() { public void run() { showSettings(); } });
             col.addView(close, new LinearLayout.LayoutParams(M, W));
         } else {
             final CheckBox cb = new CheckBox(this);
-            cb.setText("קראתי והבנתי. האחריות על השימוש היא עליי בלבד.");
+            cb.setText("קראתי והבנתי. האחריות עליי בלבד.");
             cb.setTextColor(TXT);
-            cb.setTextSize(14);
+            cb.setTextSize(small ? 13 : 14);
+            cb.setPadding(0, 0, 0, 0);
             col.addView(cb, new LinearLayout.LayoutParams(M, W));
-            final TextView ok = tv("אני מסכים/ה והמשך", 16, ON_ACC);
+            final TextView ok = tv("אני מסכים/ה והמשך", 15, ON_ACC);
             ok.setTypeface(null, Typeface.BOLD);
             ok.setGravity(Gravity.CENTER);
-            ok.setBackground(rr(ACC, 28));
-            ok.setPadding(0, dp(14), 0, dp(14));
+            ok.setBackground(rr(ACC, 24));
+            ok.setPadding(dp(8), dp(small ? 9 : 12), dp(8), dp(small ? 9 : 12));
             ok.setAlpha(0.4f);
             cb.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 public void onCheckedChanged(CompoundButton b, boolean v) { ok.setAlpha(v ? 1f : 0.4f); }
@@ -430,12 +437,15 @@ public class MainActivity extends Activity {
             });
             TextView exit = tv("יציאה", 14, DIM);
             exit.setGravity(Gravity.CENTER);
-            exit.setPadding(0, dp(14), 0, dp(4));
+            exit.setPadding(dp(16), dp(small ? 9 : 12), dp(16), dp(small ? 9 : 12));
             click(exit, new Runnable() { public void run() { finish(); } });
-            LinearLayout.LayoutParams ol = new LinearLayout.LayoutParams(M, W);
-            ol.topMargin = dp(8);
-            col.addView(ok, ol);
-            col.addView(exit, new LinearLayout.LayoutParams(M, W));
+            LinearLayout btns = new LinearLayout(this);       // one row: [continue][exit]
+            btns.setGravity(Gravity.CENTER_VERTICAL);
+            btns.addView(ok, lp(0, W, 1f));
+            btns.addView(exit, new LinearLayout.LayoutParams(W, W));
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(M, W);
+            bl.topMargin = dp(4);
+            col.addView(btns, bl);
         }
         show(col);
     }
@@ -1904,7 +1914,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 2.3", 12, DIM);
+        TextView about = tv("Phone Doctor 2.4", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
