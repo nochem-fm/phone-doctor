@@ -98,7 +98,9 @@ public class MainActivity extends Activity {
     ScrollView scroll;
     View greeting;
     EditText input;
-    TextView sendBtn, queueBtn, liveHead;
+    TextView sendBtn, queueBtn, micBtn, liveHead;
+    Voice voice;
+    String micPrefix = "";
     LinearLayout liveBody;
     JSONArray liveSteps;
     String liveSig = "";
@@ -254,6 +256,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (voice != null) voice.cancel();
         resumed = false;
         if (!Core.running) Core.saveChat();
     }
@@ -268,6 +271,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        if (code == REQ_MIC) {
+            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) onMic();
+            else toast("בלי הרשאת מיקרופון אי אפשר להכתיב");
+            return;
+        }
         if (onSetup) {
             refreshRows();
             if (flowActive) nextStep();
@@ -1068,6 +1076,13 @@ public class MainActivity extends Activity {
             public void afterTextChanged(Editable e) { }
         });
         pill.addView(input, lp(0, W, 1f));
+        micBtn = tv("\uD83C\uDFA4", 18, TXT);
+        micBtn.setGravity(Gravity.CENTER);
+        click(micBtn, new Runnable() { public void run() { onMic(); } });
+        LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(dp(40), dp(40));
+        ml.setMarginEnd(dp(4));
+        pill.addView(micBtn, ml);
+        micState(voice == null ? Voice.IDLE : voice.state());
         LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(dp(44), dp(44));
         ql.setMarginEnd(dp(6));
         pill.addView(queueBtn, ql);
@@ -1119,6 +1134,47 @@ public class MainActivity extends Activity {
             sendBtn.setText("\u25A0");
             keepScreen(true);
         }
+    }
+
+    // ---- microphone
+
+    static final int REQ_MIC = 31;
+
+    void onMic() {
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+            return;
+        }
+        if (voice == null) voice = new Voice(this, new Voice.Listener() {
+            public void state(int st) { micState(st); }
+            public void partial(String t) { setMicText(t); }
+            public void done(String t) { setMicText(t); }
+            public void error(String m) { toast(m); }
+            public void info(String m) { toast(m); }
+        });
+        if (voice.state() == Voice.IDLE) {
+            String cur = input == null ? "" : input.getText().toString();
+            micPrefix = cur.trim().isEmpty() ? "" : cur.replaceAll("\\s+$", "") + " ";
+        }
+        voice.toggle();
+    }
+
+    void setMicText(String t) {
+        if (input == null) return;
+        input.setText(micPrefix + t);
+        input.setSelection(input.getText().length());
+    }
+
+    void micState(int st) {
+        if (micBtn == null) return;
+        boolean active = st == Voice.LISTEN || st == Voice.RECORD;
+        micBtn.setBackground(active ? rr(ERR, 20) : null);
+        micBtn.setText(st == Voice.WORKING ? "\u2026" : "\uD83C\uDFA4");
+        micBtn.setAlpha(st == Voice.WORKING ? 0.6f : 1f);
+        if (input != null && st == Voice.LISTEN) input.setHint("מקשיב… דבר עכשיו");
+        else if (input != null && st == Voice.RECORD) input.setHint("מקליט… לחץ 🎤 לסיום");
+        else if (input != null && st == Voice.WORKING) input.setHint("מתמלל דרך Gemini…");
+        else if (input != null) input.setHint("שאל את Phone Doctor");
     }
 
     void updateQueueBtn() {
@@ -1914,7 +1970,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 2.4", 12, DIM);
+        TextView about = tv("Phone Doctor 2.5", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
