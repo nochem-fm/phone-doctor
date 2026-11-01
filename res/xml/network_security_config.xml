@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Filtered networks (NetFree, Rimon / Etrog by Netspark) inspect HTTPS with their own root
+  certificate. These anchors let the app reach Gemini through them.
+  Android 7+ reads this file; for Android 4.4-6 Net.java adds the same certificates in code.
+  One certificate per file: NetFree's ED25519 root is left out because Android 7-9 cannot parse it,
+  and one unreadable entry here would break every HTTPS connection of the app.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+            <!-- NetFree Root CA X2 -->
+            <certificates src="@raw/netfree_rsa" />
+            <certificates src="@raw/netfree_rsa_2037" />
+            <certificates src="@raw/netfree_ecc256" />
+            <certificates src="@raw/netfree_ecc384" />
+            <!-- Netspark (Rimon / Etrog) -->
+            <certificates src="@raw/netspark" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

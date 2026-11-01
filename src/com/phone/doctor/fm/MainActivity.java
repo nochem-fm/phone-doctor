@@ -2166,7 +2166,9 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 3.2", 12, DIM);
+        String ver = "";
+        try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        TextView about = tv("Phone Doctor " + ver, 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
