@@ -381,6 +381,16 @@ public class MainActivity extends Activity {
         return t;
     }
 
+    void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("url", url));
+            toast("לא נמצא דפדפן. הכתובת הועתקה: " + url);
+        }
+    }
+
     View glyph(int type, int color) { return new Glyph(this, type, color, dp(48)); }
 
     View topBar(String title) {
@@ -1902,7 +1912,17 @@ public class MainActivity extends Activity {
         kr.addView(k, lp(0, W, 1f));
         kr.addView(eye);
         c.addView(kr);
-        c.addView(note("יצירת מפתח חינמי: aistudio.google.com/apikey. המפתח נשמר רק במכשיר."));
+        LinearLayout keyHelp = new LinearLayout(this);
+        keyHelp.setGravity(Gravity.CENTER_VERTICAL);
+        keyHelp.setPadding(0, dp(2), 0, dp(8));
+        keyHelp.addView(tv("יצירת מפתח חינמי: ", 12, DIM));
+        TextView keyLink = tv("aistudio.google.com/apikey", 13, ACC);
+        keyLink.setPaintFlags(keyLink.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        keyLink.setPadding(0, dp(6), 0, dp(6));   // bigger touch area
+        click(keyLink, new Runnable() { public void run() { openUrl("https://aistudio.google.com/apikey"); } });
+        keyHelp.addView(keyLink);
+        c.addView(keyHelp);
+        c.addView(note("המפתח נשמר רק במכשיר."));
         LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(W, W);
         bl.bottomMargin = dp(6);
         c.addView(pillBtn("בדוק מפתח ורענן רשימת מודלים", new Runnable() {
@@ -2019,7 +2039,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 2.6", 12, DIM);
+        TextView about = tv("Phone Doctor 2.7", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
@@ -2029,9 +2049,7 @@ public class MainActivity extends Activity {
         credit.setPadding(0, dp(6), 0, dp(12));
         click(credit, new Runnable() {
             public void run() {
-                try {
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://mitmachim.top/user/%D7%A0%D7%95%D7%97%D7%A2%D7%9D-fm")));
-                } catch (Exception e) { toast("לא נמצאה אפליקציית דפדפן"); }
+                openUrl("https://mitmachim.top/user/%D7%A0%D7%95%D7%97%D7%A2%D7%9D-fm");
             }
         });
         list.addView(credit);
