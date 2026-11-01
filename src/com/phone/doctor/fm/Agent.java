@@ -88,6 +88,8 @@ final class Agent {
     private final List<JSONObject> attach = new ArrayList<JSONObject>();
     private String lastModel = "";
 
+    String lastModelName() { return lastModel; }
+
     Agent(Context ctx, UI ui, boolean rootOk) {
         this.ctx = ctx;
         this.ui = ui;
@@ -886,14 +888,17 @@ final class Agent {
             } catch (SocketTimeoutException e) {
                 cur = null;
                 if (stop) throw new Stopped();
+                ErrorLog.add("chat", m, 0, "timeout: " + e.getMessage());
                 if (++tmo < 3) { ui.status("Gemini לא ענה, מנסה שוב…"); continue; }
                 throw new Exception("Gemini לא ענה בזמן (timeout). נסה שוב או החלף למודל מהיר יותר.");
             } catch (java.io.IOException e) {
                 cur = null;
                 if (stop) throw new Stopped();
+                ErrorLog.add("chat", m, 0, String.valueOf(e));
                 throw e;
             }
             if (code < 400) return new JSONObject(s);
+            ErrorLog.add(body.has("tools") ? "chat" : "summary", m, code, s);
             String msg = s;
             try { msg = new JSONObject(s).getJSONObject("error").getString("message"); } catch (Exception ignored) { }
             String low = msg.toLowerCase();

@@ -22,6 +22,7 @@ final class Models {
         if (code >= 400) {
             String msg = s;
             try { msg = new JSONObject(s).getJSONObject("error").getString("message"); } catch (Exception ignored) { }
+            ErrorLog.add("models", "", code, s);
             throw new Agent.ApiError(code, msg);
         }
         List<String> out = new ArrayList<String>();

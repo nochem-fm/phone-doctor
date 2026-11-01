@@ -147,6 +147,7 @@ final class Core {
         if (fe != null) {
             boolean q = fe instanceof Agent.QuotaException;
             JSONObject e = entry("e", q ? fe.getMessage() : "שגיאה: " + Agent.hebrew(fe));
+            ErrorLog.add("shown", a.lastModelName(), 0, "user saw: " + Agent.hebrew(fe) + "\ncause: " + fe);
             try { e.put("q", q); } catch (Exception ignored) { }
             add(e);
         }

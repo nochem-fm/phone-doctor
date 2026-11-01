@@ -1408,6 +1408,13 @@ public class MainActivity extends Activity {
         t.setPadding(0, dp(4), 0, dp(12));
         chat.addView(spark);
         chat.addView(t);
+        if (err) {
+            TextView det = tv("פרטים טכניים (להעתקה)", 12, DIM);
+            det.setPaintFlags(det.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+            det.setPadding(0, 0, 0, dp(12));
+            click(det, new Runnable() { public void run() { showErrors(); } });
+            chat.addView(det);
+        }
         if (replaying) {
             scrollDown();
         } else {
@@ -1718,6 +1725,28 @@ public class MainActivity extends Activity {
             list.addView(r, l);
         }
         show(col);
+    }
+
+    void showErrors() {
+        final String txt = ErrorLog.text(30);
+        TextView t = tv(txt, 11, TXT);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setTextIsSelectable(true);
+        t.setPadding(dp(16), dp(8), dp(16), dp(8));
+        t.setTextDirection(View.TEXT_DIRECTION_LTR);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(t);
+        new AlertDialog.Builder(this, dlg()).setTitle("יומן שגיאות Gemini").setView(sv)
+            .setPositiveButton("העתק", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("errors", txt));
+                    toast("הועתק. אפשר להדביק ולשלוח");
+                }
+            })
+            .setNeutralButton("נקה", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) { ErrorLog.clear(); toast("היומן נוקה"); if (screen.equals("settings")) showSettings(); }
+            })
+            .setNegativeButton("סגור", null).show();
     }
 
     void showMemory() {
@@ -2261,6 +2290,10 @@ public class MainActivity extends Activity {
         });
         c.addView(watchSw);
         c.addView(note("כל כמה שעות, בלי AI ובלי מכסה: אחסון כמעט מלא, סוללה שיורדת מהר, אפליקציה שקורסת שוב ושוב (דורש root או הרשאת DUMP). התראה רק כשנמצאה בעיה."));
+
+        c = card(list, "יומן שגיאות Gemini");
+        c.addView(row("שגיאות שמורות", String.valueOf(ErrorLog.count()), new Runnable() { public void run() { showErrors(); } }));
+        c.addView(note("כל שגיאה שחזרה מ-Gemini או מהרשת, עם הטקסט המקורי, המודל והשעה. אפשר להעתיק ולשלוח למפתח."));
 
         c = card(list, "יומן שינויים");
         int ac = Journal.activeCount();

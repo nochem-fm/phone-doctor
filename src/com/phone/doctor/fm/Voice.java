@@ -298,6 +298,7 @@ final class Voice {
             }
             String msg = s;
             try { msg = new JSONObject(s).getJSONObject("error").getString("message"); } catch (Exception ignored) { }
+            ErrorLog.add("voice", m, code, s);
             last = new Agent.ApiError(code, msg);
             if (code != 429 && code != 404 && code < 500) break;   // other models will not help
         }
