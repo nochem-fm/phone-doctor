@@ -115,6 +115,7 @@ final class Agent {
             contents.put(um);
             for (int i = 0; i < 60; i++) {
                 if (stop) { repair(); ui.reply("עצרתי לפי בקשתך."); return; }
+                maybeSummarize();
                 compact();
                 JSONObject resp = post(body());
                 JSONArray cands = resp.optJSONArray("candidates");
@@ -992,6 +993,89 @@ final class Agent {
     }
 
     /** Very long chats: shorten old tool outputs (problem, answers and actions stay intact). */
+    // ================================================================ summarizing long chats
+
+    private static final int SUMMARY_AT = 80000;   // ~20k tokens of text
+    private int sumFailedAt = -100;                 // do not retry a failed summary on every step
+
+    private static boolean isUserText(JSONObject c) {
+        if (!"user".equals(c.optString("role"))) return false;
+        JSONArray p = c.optJSONArray("parts");
+        if (p == null) return false;
+        for (int i = 0; i < p.length(); i++) if (p.optJSONObject(i) != null && p.optJSONObject(i).has("functionResponse")) return false;
+        return true;
+    }
+
+    /** Plain-text transcript of entries [0, end) for the summarizer, with long outputs cut. */
+    private String transcript(int end) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < end; i++) {
+            JSONObject c = contents.optJSONObject(i);
+            JSONArray parts = c == null ? null : c.optJSONArray("parts");
+            if (parts == null) continue;
+            String who = "model".equals(c.optString("role")) ? "AGENT" : "USER";
+            for (int j = 0; j < parts.length(); j++) {
+                JSONObject p = parts.optJSONObject(j);
+                if (p == null || p.optBoolean("thought")) continue;
+                if (p.has("text")) sb.append(who).append(": ").append(cut(p.optString("text"), 2000)).append('\n');
+                else if (p.has("functionCall")) {
+                    JSONObject f = p.optJSONObject("functionCall");
+                    sb.append("AGENT CALLED ").append(f.optString("name")).append(' ').append(cut(String.valueOf(f.optJSONObject("args")), 800)).append('\n');
+                } else if (p.has("functionResponse")) {
+                    JSONObject f = p.optJSONObject("functionResponse");
+                    sb.append("RESULT of ").append(f.optString("name")).append(": ").append(cut(String.valueOf(f.optJSONObject("response")), 1500)).append('\n');
+                } else if (p.has("inlineData")) sb.append("[screenshot]\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String cut(String s, int n) {
+        return s.length() <= n ? s : s.substring(0, n) + "…";
+    }
+
+    /**
+     * When the chat gets long, the older part is replaced by a short summary written by the model
+     * (one extra request). The agent keeps remembering the problem, the findings and what was changed,
+     * and every later request is much smaller. If summarizing fails, compact() still trims as before.
+     */
+    private void maybeSummarize() throws Stopped {
+        try {
+            int n = contents.length();
+            if (n < 10 || n < sumFailedAt + 8 || textSize() < SUMMARY_AT) return;
+            sumFailedAt = n;
+            int cutAt = -1;
+            for (int i = n - 4; i >= 2; i--) if (isUserText(contents.getJSONObject(i))) { cutAt = i; break; }
+            if (cutAt < 2) return;
+            ui.status("השיחה ארוכה, מסכם את החלק הקודם…");
+            String prompt = "Summarize the earlier part of this phone-repair conversation for the agent that continues it. "
+                + "Write in English, compact bullet points, max 350 words. Include: the user's problem(s) in their words; device facts discovered "
+                + "(packages, versions, settings, errors with exact names and values); every change already made (exact commands) and its result; "
+                + "what was ruled out; what is still open; anything the user asked for or refused. Do not invent anything.\n\n"
+                + transcript(cutAt);
+            JSONObject b = new JSONObject();
+            b.put("contents", new JSONArray().put(msg("user", prompt)));
+            JSONObject resp = post(b);
+            JSONArray cands = resp.optJSONArray("candidates");
+            JSONObject ct = cands != null && cands.length() > 0 ? cands.getJSONObject(0).optJSONObject("content") : null;
+            JSONArray parts = ct == null ? null : ct.optJSONArray("parts");
+            StringBuilder sum = new StringBuilder();
+            for (int i = 0; parts != null && i < parts.length(); i++)
+                if (!parts.getJSONObject(i).optBoolean("thought")) sum.append(parts.getJSONObject(i).optString("text"));
+            if (sum.toString().trim().length() < 40) return;
+            JSONArray nc = new JSONArray();
+            nc.put(msg("user", "[SUMMARY OF THE EARLIER PART OF THIS CONVERSATION]\n" + sum.toString().trim()));
+            nc.put(msg("model", "Understood. I will continue from this summary."));
+            for (int i = cutAt; i < n; i++) nc.put(contents.get(i));
+            contents = nc;
+            sumFailedAt = -100;
+        } catch (Stopped e) {
+            throw e;
+        } catch (Exception ignored) {
+            // no summary this time; compact() trims instead
+        }
+    }
+
     /** Rough size of the context without images (≈ 4 characters per token). */
     private int textSize() {
         try {

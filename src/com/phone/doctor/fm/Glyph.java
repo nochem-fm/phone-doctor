@@ -8,7 +8,7 @@ import android.view.View;
 
 /** Toolbar icons drawn as vectors, so they show on every Android version (old fonts lack ☰ ⚙). */
 final class Glyph extends View {
-    static final int MENU = 0, PLUS = 1, GEAR = 2, BACK = 3, MIC = 4;
+    static final int MENU = 0, PLUS = 1, GEAR = 2, BACK = 3, MIC = 4, SHARE = 5;
     private final int type;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final int box;
@@ -60,6 +60,18 @@ final class Glyph extends View {
                 c.drawRoundRect(new android.graphics.RectF(cx - 4.5f * u, cy - 12 * u, cx + 4.5f * u, cy + 3 * u), 4.5f * u, 4.5f * u, p);
                 c.drawArc(new android.graphics.RectF(cx - 8.5f * u, cy - 6 * u, cx + 8.5f * u, cy + 7.5f * u), 0, 180, false, p);
                 c.drawLine(cx, cy + 7.5f * u, cx, cy + 12 * u, p);
+                break;
+            }
+            case SHARE: {   // three dots joined by two lines
+                float r = 3.2f * u;
+                float ax = cx + 7 * u, ay = cy - 8 * u, bx = cx - 7 * u, by = cy, dx = cx + 7 * u, dy = cy + 8 * u;
+                p.setStrokeWidth(2.2f * u);
+                c.drawLine(bx, by, ax, ay, p);
+                c.drawLine(bx, by, dx, dy, p);
+                p.setStyle(Paint.Style.FILL);
+                c.drawCircle(ax, ay, r, p);
+                c.drawCircle(bx, by, r, p);
+                c.drawCircle(dx, dy, r, p);
                 break;
             }
             case GEAR: {

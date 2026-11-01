@@ -1149,6 +1149,9 @@ public class MainActivity extends Activity {
         click(gear, new Runnable() { public void run() { showSettings(); } });
         bar.addView(menu);
         bar.addView(title, lp(0, W, 1f));
+        View share = glyph(Glyph.SHARE, DIM);
+        click(share, new Runnable() { public void run() { shareReport(); } });
+        bar.addView(share);
         bar.addView(plus);
         bar.addView(gear);
         col.addView(bar);
@@ -1705,6 +1708,61 @@ public class MainActivity extends Activity {
             list.addView(r, l);
         }
         show(col);
+    }
+
+    // ================================================================= share report
+
+    /** The current chat as a tidy text report (problem, steps with commands, answers) for a forum or a technician. */
+    String reportText() {
+        StringBuilder sb = new StringBuilder();
+        String ver = "";
+        try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        sb.append("דוח Phone Doctor ").append(ver).append('\n');
+        sb.append("מכשיר: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
+            .append(", אנדרואיד ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n");
+        sb.append("תאריך: ").append(DateFormat.format("dd/MM/yyyy HH:mm", System.currentTimeMillis())).append("\n");
+        JSONArray log = Core.uiLog;
+        for (int i = 0; i < log.length(); i++) {
+            JSONObject e = log.optJSONObject(i);
+            if (e == null) continue;
+            String k = e.optString("k");
+            if (k.equals("u")) sb.append("\n━━━━━━━━━━\nשאלה: ").append(e.optString("t")).append('\n');
+            else if (k.equals("a")) sb.append("\nתשובה:\n").append(e.optString("t").replace("**", "")).append('\n');
+            else if (k.equals("e")) sb.append("\nשגיאה: ").append(e.optString("t")).append('\n');
+            else if (k.equals("s")) {
+                JSONArray st = e.optJSONArray("steps");
+                if (st == null || st.length() == 0) continue;
+                sb.append("\nשלבים:\n");
+                for (int j = 0; j < st.length(); j++) {
+                    JSONObject x = st.optJSONObject(j);
+                    if (x == null || x.optString("type").equals("think")) continue;
+                    String state = x.optString("state");
+                    sb.append(state.equals("ok") ? "  [v] " : state.equals("fail") ? "  [x] " : "  [ ] ").append(x.optString("title")).append('\n');
+                    String d = x.optString("detail");
+                    if (x.optString("type").equals("cmd") && !d.isEmpty()) sb.append("      ").append(d.length() > 300 ? d.substring(0, 300) + "…" : d).append('\n');
+                    if (x.has("jid")) {
+                        JSONObject j2 = Journal.get(x.optLong("jid"));
+                        if (j2 != null) sb.append("      ").append(j2.optString("state").equals("undone") ? "(בוטל)" : Journal.canUndo(j2) ? "(ניתן לביטול)" : "(בלתי הפיך)").append('\n');
+                    }
+                }
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    void shareReport() {
+        if (Core.uiLog.length() == 0) { toast("אין עדיין שיחה לשתף"); return; }
+        String text = reportText();
+        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_SUBJECT, "דוח Phone Doctor");
+        i.putExtra(Intent.EXTRA_TEXT, text);
+        try {
+            startActivity(Intent.createChooser(i, "שיתוף הדוח"));
+        } catch (Exception e) {
+            ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("report", text));
+            toast("אין אפליקציה לשיתוף. הדוח הועתק ללוח");
+        }
     }
 
     // ================================================================= history
