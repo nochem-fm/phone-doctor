@@ -53,6 +53,7 @@ final class Voice {
     private File recFile;
     private int state = IDLE;
     private boolean heard;
+    private int gen;   // bumped by cancel(): late results from an old session are dropped
 
     Voice(Context c, Listener l) {
         this.ctx = c;
@@ -76,10 +77,11 @@ final class Voice {
     }
 
     void cancel() {
+        gen++;
         h.removeCallbacksAndMessages(null);
         if (sr != null) { try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { } sr = null; }
         if (rec != null) stopRecording(false);
-        if (state != WORKING) set(IDLE);
+        set(IDLE);
     }
 
     // ------------------------------------------------------------------ 1. device speech recognizer
@@ -115,6 +117,7 @@ final class Voice {
         }
         if (sr == null) { startRecording(true); return; }
         heard = false;
+        final int myGen = gen;
         sr.setRecognitionListener(new RecognitionListener() {
             public void onReadyForSpeech(Bundle b) { }
             public void onBeginningOfSpeech() { heard = true; }
@@ -124,11 +127,13 @@ final class Voice {
             public void onEvent(int t, Bundle b) { }
 
             public void onPartialResults(Bundle b) {
+                if (myGen != gen) return;
                 String t = first(b);
                 if (t != null && !t.isEmpty()) l.partial(t);
             }
 
             public void onResults(Bundle b) {
+                if (myGen != gen) return;
                 String t = first(b);
                 release();
                 set(IDLE);
@@ -137,6 +142,7 @@ final class Voice {
             }
 
             public void onError(int e) {
+                if (myGen != gen) return;   // cancelled on purpose: do not fall back to recording
                 release();
                 // 6 speech timeout, 7 no match: the user simply did not speak
                 if (e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || e == SpeechRecognizer.ERROR_NO_MATCH) {
@@ -230,6 +236,7 @@ final class Voice {
         }
         set(WORKING);
         final File f = recFile;
+        final int myGen = gen;
         new Thread(new Runnable() {
             public void run() {
                 String text = null, err = null;
@@ -238,6 +245,7 @@ final class Voice {
                 final String t = text, er = err;
                 h.post(new Runnable() {
                     public void run() {
+                        if (myGen != gen) return;   // cancelled (message already sent)
                         set(IDLE);
                         if (er != null) l.error("התמלול נכשל: " + er);
                         else if (t == null || t.isEmpty()) l.error("לא שמעתי מה אמרת. נסה שוב.");

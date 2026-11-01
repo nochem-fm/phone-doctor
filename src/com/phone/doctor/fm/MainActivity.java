@@ -1110,6 +1110,7 @@ public class MainActivity extends Activity {
                 if (Core.running) { Core.stopRun(); toast("עוצר…"); return; }   // busy = always stop
                 String t = input.getText().toString().trim();
                 if (!t.isEmpty()) {
+                    stopDictation();
                     input.setText("");
                     onSend(t);
                 }
@@ -1125,6 +1126,7 @@ public class MainActivity extends Activity {
                 String t = input.getText().toString().trim();
                 if (Core.running && !t.isEmpty()) {
                     Core.queue = t;
+                    stopDictation();
                     input.setText("");
                     toast("ההודעה תישלח כשהסוכן יסיים");
                 }
@@ -1218,8 +1220,14 @@ public class MainActivity extends Activity {
         voice.toggle();
     }
 
+    /** Called when the box is sent: late speech results must not refill it. */
+    void stopDictation() {
+        micPrefix = "";
+        if (voice != null && voice.state() != Voice.IDLE) voice.cancel();
+    }
+
     void setMicText(String t) {
-        if (input == null) return;
+        if (input == null || voice == null) return;
         input.setText(micPrefix + t);
         input.setSelection(input.getText().length());
     }
@@ -2041,7 +2049,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 3.0", 12, DIM);
+        TextView about = tv("Phone Doctor 3.1", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
