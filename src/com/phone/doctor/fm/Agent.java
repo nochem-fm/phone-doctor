@@ -905,7 +905,7 @@ final class Agent {
             if (code == 429) {
                 Quota q = quota(s, msg);
                 long delay = q.delayMs;
-                if (q.daily) { UNTIL.put(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); continue; }
+                if (q.daily) { markUntil(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); continue; }
                 if (q.tokens) {
                     // input-tokens-per-minute: the conversation itself is too big. Shrink it, then try again.
                     if (compactHard()) { data = body.toString().getBytes("UTF-8"); ui.status("השיחה ארוכה, מקצר את ההקשר…"); }
@@ -917,7 +917,7 @@ final class Agent {
                 if (++sw > 40) throw new QuotaException("כל המודלים עמוסים כרגע. השיחה נשמרה, נסה שוב בעוד דקה.");
                 continue;
             }
-            if (code == 404) { UNTIL.put(m, System.currentTimeMillis() + 86400000L); continue; } // model removed/unavailable
+            if (code == 404) { markUntil(m, System.currentTimeMillis() + 86400000L); continue; } // model removed/unavailable
             if (code == 400 && low.contains("token") && (low.contains("exceed") || low.contains("too long") || low.contains("maximum"))) {
                 // longer than this model's context window: shrink; if that is not possible, skip this model for now
                 if (compactHard()) { data = body.toString().getBytes("UTF-8"); continue; }
@@ -930,13 +930,50 @@ final class Agent {
                 data = body.toString().getBytes("UTF-8");
                 continue;
             }
-            if (code >= 500 && ++srv < 4) { waitMs("שגיאת שרת, מנסה שוב", 3000L * srv); continue; }
+            if (code >= 500) {
+                // "model is experiencing high demand" (503) and other server errors: try another model first
+                if (hasOtherModel(m) && ++sw <= 40) {
+                    COOL.put(m, System.currentTimeMillis() + 60000L);
+                    ui.status("המודל " + m + " עמוס, עובר למודל אחר…");
+                    attempt--;
+                    continue;
+                }
+                if (++srv < 5) { waitMs("השרת של Gemini עמוס, מנסה שוב", 5000L * srv); continue; }
+            }
             throw new ApiError(code, msg);
         }
         throw new QuotaException("לא הצלחתי לקבל תשובה מ-Gemini אחרי כמה ניסיונות. השיחה נשמרה, אפשר להמשיך אחר כך.");
     }
 
+    /** Daily-quota / removed-model marks survive an app restart (otherwise every restart re-tries them). */
+    private static void saveUntil() {
+        try {
+            JSONObject o = new JSONObject();
+            long now = System.currentTimeMillis();
+            synchronized (UNTIL) { for (Map.Entry<String, Long> e : UNTIL.entrySet()) if (e.getValue() > now) o.put(e.getKey(), e.getValue()); }
+            Core.prefs().edit().putString("until", o.toString()).apply();
+        } catch (Exception ignored) { }
+    }
+
+    private static boolean untilLoaded;
+
+    private static void loadUntil() {
+        if (untilLoaded) return;
+        untilLoaded = true;
+        try {
+            JSONObject o = new JSONObject(Core.prefs().getString("until", "{}"));
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) { String k = it.next(); long v = o.optLong(k); if (v > System.currentTimeMillis() && !UNTIL.containsKey(k)) UNTIL.put(k, v); }
+        } catch (Exception ignored) { }
+    }
+
+    private static void markUntil(String m, long until) {
+        UNTIL.put(m, until);
+        saveUntil();
+    }
+
     private static boolean exhausted(String m) {
+        loadUntil();
         Long t = UNTIL.get(m);
         return t != null && t > System.currentTimeMillis();
     }
@@ -996,7 +1033,8 @@ final class Agent {
                 for (String m : candidates()) { Long t = UNTIL.get(m); if (t != null) left = Math.min(left, t - now); }
                 long mins = Math.max(1, left / 60000L);
                 throw new QuotaException("המכסה היומית נגמרה (או שהמודל הוסר) בכל המודלים שנבחרו. תתאפס בעוד כ-" + (mins / 60) + " שעות ו-" + (mins % 60)
-                    + " דקות. השיחה נשמרה: אפשר להמשיך אחר כך, להוסיף מודלי גיבוי או להחליף מפתח בהגדרות.");
+                    + " דקות. במכסה החינמית יש לכל מודל מספר קטן של בקשות ביום (כרגע 20), וכל צעד של הסוכן הוא בקשה. "
+                    + "השיחה נשמרה: אפשר להמשיך אחר כך, להוסיף מודלי גיבוי, או להכניס בהגדרות מפתח מחשבון Google אחר.");
             }
             waitMs("כל המודלים הגיעו למגבלת הדקה, ממתין", soonest);
         }
