@@ -212,6 +212,7 @@ final class Agent {
                 case "app_restore": appRestore(args, out); break;
                 case "app_backups": appBackups(args, out); break;
                 case "apk_info": apkInfo(args, out); break;
+                case "find_files": findFiles(args, out); break;
                 case "apk_install": apkInstall(args, out); break;
                 default: out.put("error", "unknown tool " + name);
             }
@@ -854,6 +855,16 @@ final class Agent {
         ui.stepDone(st, r.startsWith("OK"), r, null);
     }
 
+    private void findFiles(JSONObject a, JSONObject out) throws Exception {
+        String qn = a.optString("name", ""), kind = a.optString("type", "any");
+        int st = ui.step("cmd", a.optString("purpose", "מחפש את הקובץ"), "find_files '" + qn + "' " + kind);
+        ui.status("מחפש קבצים…");
+        actions++;
+        String r = FileTools.find(ctx, qn, kind);
+        out.put("result", r);
+        ui.stepDone(st, r.startsWith("Found"), r, null);
+    }
+
     // ---------------------------------------------------------------- APK files
 
     private void apkInfo(JSONObject a, JSONObject out) throws Exception {
@@ -994,6 +1005,9 @@ final class Agent {
             + "OVER TIME: use wait_and_recheck to compare a reading after some seconds/minutes, and schedule_followup when the effect shows only after hours or a reboot.\n"
             + "SCREEN SETTINGS: for a setting that has no shell command, use screen_sequence (one approval for the whole path, with 'expect' checks).\n"
             + "FILES: for a file that will not open, inspect_files mode=check first; for full storage use mode=usage and mode=duplicates.\n"
+            + "FIND IT YOURSELF: when the user mentions a file, app or setting, locate it with your tools (find_files, inspect_app, usage stats) before asking; ask only what tools truly cannot tell, and then with ask_user buttons.\n"
+            + "FACTS VS GUESSES: say exactly what each check proved. A header/metadata check does not prove a file is whole; low RAM or storage is a POSSIBLE cause, not a proven one, unless you measured it during the problem. Label guesses as possibilities.\n"
+            + "TOOLS THAT DO NOT EXIST: there is no ffmpeg, python, curl or busybox unless you checked with 'command -v'. Use the built-in tools (inspect_files remux/media_deep) instead.\n"
             + "APK FILES: for 'the app does not install' or a downloaded APK, run apk_info first (compatibility, signature, fake check), then apk_install.\n"
             + "APP CRASHES: use reproduce_app first: one call opens the app and returns whether it stayed alive, the crash log, memory and a screenshot.\n"
             + "CHOICES: when the user must decide between options (for example clear cache / clear data / do nothing), use ask_user with buttons instead of asking in text.\n"
@@ -1061,9 +1075,9 @@ final class Agent {
         d.put(fn("inspect_files", "Read-only file diagnostics. mode=check: is a file (or every file in a folder) damaged? Detects the real type from the content, wrong extension, empty or cut files, broken archives/images/PDF/media. "
                 + "mode=usage: what takes the space in a folder. mode=duplicates: duplicate files and how much space they waste. "
                 + "mode=archive: list a ZIP's content, damaged or password-protected entries. mode=exif: photo camera/date/LOCATION. mode=strip_location: writes a copy of a JPEG without location (original unchanged). "
-                + "mode=media: codecs, resolution, and whether this phone has a decoder (why a video will not play). mode=large: files over 50 MB, marking ones unchanged 90+ days. "
+                + "mode=media: codecs/resolution from the HEADER only (does not prove the file is whole). mode=media_deep: reads every sample of one video/audio file: holes in the video timeline, video ending before the audio, unreadable samples, and whether this phone's decoder supports its size (the real check for 'picture freezes but sound continues'). mode=remux: writes '<name>_fixed.mp4', a clean MP4 with the same streams (no re-encoding; there is NO ffmpeg on phones). mode=large: files over 50 MB, marking ones unchanged 90+ days. "
                 + "mode=downloads: repeated downloads like 'file (1).pdf' in a folder. mode=doc: PDF pages/password, Office type, encrypted Office files. mode=deleted: recycle-bin files still on the phone (.trashed-*, gallery bins).",
-            new String[][]{{"path", "string", "File or folder, e.g. /sdcard/Download or /sdcard/DCIM/Camera/x.jpg"}, {"mode", "string", "check, usage, duplicates, archive, exif, strip_location, media, large, downloads, doc or deleted"},
+            new String[][]{{"path", "string", "File or folder, e.g. /sdcard/Download or /sdcard/DCIM/Camera/x.jpg"}, {"mode", "string", "check, usage, duplicates, archive, exif, strip_location, media, media_deep, remux, large, downloads, doc or deleted"},
                 {"purpose", "string", "Short Hebrew sentence."}}, "path", "mode", "purpose"));
         d.put(fn("reproduce_app", "One call to reproduce an app problem: (with root force-stops it,) launches it, waits N seconds, then returns whether the process is still alive, the foreground activity, crash/error log lines since launch, memory, and a screenshot.",
             new String[][]{{"package", "string", "Package name."}, {"seconds", "number", "4-30, default 8."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
@@ -1075,6 +1089,9 @@ final class Agent {
             new String[][]{{"package", "string", "Package name."}, {"note", "string", "Optional short note."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
         d.put(fn("app_restore", "Restore an app from a backup (root): reinstalls that version and puts its data back. The current state is backed up first.",
             new String[][]{{"backup_id", "string", "From app_backup or app_backups."}, {"purpose", "string", "Short Hebrew sentence."}}, "backup_id", "purpose"));
+        d.put(fn("find_files", "Find files on the phone's storage by PART of the name (any language, case-insensitive), newest first, including Android/media (WhatsApp/Telegram media). Use it whenever the user mentions a file, instead of asking for its path.",
+            new String[][]{{"name", "string", "Part of the file name, e.g. a Hebrew word from it. Empty = all files of the type."},
+                {"type", "string", "any, video, audio, image, doc, archive"}, {"purpose", "string", "Short Hebrew sentence."}}, "name", "purpose"));
         d.put(fn("apk_info", "Analyze an APK/.apks/.xapk FILE before installing: package, version, min/target SDK vs this phone, CPU ABIs vs this phone, split-part detection, signer and certificate SHA-256 (debug key?), comparison with the installed version (downgrade, different signer = cannot update / possible fake, new permissions), sensitive permissions, red flags (accessibility/admin/notification access, impersonation of a known app), file SHA-256, and a clear VERDICT.",
             new String[][]{{"path", "string", "Path of the file, e.g. /sdcard/Download/app.apk"}, {"purpose", "string", "Short Hebrew sentence."}}, "path", "purpose"));
         d.put(fn("apk_install", "Install an .apk, or with root also a bundle (.apks/.xapk incl. OBB). With root: pm install, failures explained; an existing app is backed up first. Without root: opens the system installer for a single .apk. Run apk_info first.",

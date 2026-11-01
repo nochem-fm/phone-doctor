@@ -98,7 +98,11 @@ final class Core {
         ensureAgent();
         if (assistB64 == null && (assistText == null || assistText.isEmpty())) {
             String local = null;
-            try { local = LocalAnswers.answer(app, text); } catch (Exception ignored) { }
+            // never answer locally when the agent just asked the user something: the message is a reply, not a new question
+            String lr = lastReply == null ? "" : lastReply.trim();
+            boolean replying = lr.length() > 0 && lr.substring(Math.max(0, lr.length() - 300)).contains("?")
+                && uiLog.length() > 0 && !uiLog.optJSONObject(uiLog.length() - 1).optString("t").contains("נענה מקומית");
+            try { if (!replying) local = LocalAnswers.answer(app, text); } catch (Exception ignored) { }
             if (local != null) {   // simple factual question: answered on the phone, no request, no quota
                 if (curId == null) curId = String.valueOf(System.currentTimeMillis());
                 add(entry("u", text));

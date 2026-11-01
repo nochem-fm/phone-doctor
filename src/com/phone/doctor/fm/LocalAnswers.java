@@ -38,6 +38,8 @@ final class LocalAnswers {
         String t = norm(text);
         if (t.length() > 60) return null;                       // longer messages are real problems
         if (any(t, "לא ", "אין", "מלא", "בעיה", "תקן", "תתקן", "למה", "איך", "עזור", "מתרוקנת", "נגמרת", "איטי", "קורס", "נתקע", "תפנה", "לפנות")) return null;
+        // only real questions ("כמה ...?", "מה ...") are answered locally; "באחסון הראשי" is a reply, not a question
+        if (!(text.contains("?") || any(t, "כמה", "מה ", "מהי", "מהו", "איזה", "איזו", "תגיד", "בדוק", "תבדוק"))) return null;
         String a = null;
         if (any(t, "ram", "זיכרון", "זכרון")) a = ram(c);
         else if (any(t, "דלוק", "uptime", "זמן פעולה", "הודלק", "אתחול האחרון", "אתחול אחרון")) a = uptime();

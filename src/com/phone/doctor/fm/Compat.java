@@ -56,6 +56,26 @@ final class Compat {
         }
     }
 
+    /** Can a hardware/software decoder on this phone play this codec at this size? */
+    static String decoderCan(String mime, int w, int h) {
+        try {
+            android.media.MediaCodecList l = new android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS);
+            boolean any = false;
+            for (android.media.MediaCodecInfo ci : l.getCodecInfos()) {
+                if (ci.isEncoder()) continue;
+                for (String t : ci.getSupportedTypes()) {
+                    if (!t.equalsIgnoreCase(mime)) continue;
+                    any = true;
+                    android.media.MediaCodecInfo.VideoCapabilities vc = ci.getCapabilitiesForType(t).getVideoCapabilities();
+                    if (vc == null || vc.isSizeSupported(w, h)) return "decoder " + ci.getName() + " supports " + w + "x" + h;
+                }
+            }
+            return any ? "NO DECODER ON THIS PHONE SUPPORTS " + w + "x" + h + " for " + mime + " (too large for the hardware)" : "NO DECODER FOR " + mime + " ON THIS PHONE";
+        } catch (Exception e) {
+            return "decoder check failed: " + e.getMessage();
+        }
+    }
+
     static int immutable() {
         return Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
     }

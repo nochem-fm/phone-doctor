@@ -31,13 +31,15 @@ final class FileTools {
             switch (mode == null ? "check" : mode) {
                 case "usage": return usage(f, rootOk);
                 case "duplicates": return duplicates(f);
-                case "archive": return archive(f);
-                case "exif": return exif(f);
+                case "archive": return f.isDirectory() ? forEach(f, "archive") : archive(f);
+                case "exif": return f.isDirectory() ? forEach(f, "exif") : exif(f);
                 case "strip_location": return stripLocation(f);
-                case "media": return media(f);
+                case "media": return f.isDirectory() ? forEach(f, "media") : media(f);
+                case "media_deep": return f.isDirectory() ? "media_deep needs ONE file, not a folder. Use find_files to locate it." : mediaDeep(f);
+                case "remux": return f.isDirectory() ? "remux needs ONE file, not a folder." : remux(f);
                 case "large": return large(f, 50);
                 case "downloads": return downloadCopies(f);
-                case "doc": return doc(f);
+                case "doc": return f.isDirectory() ? forEach(f, "doc") : doc(f);
                 case "deleted": return deleted(f);
                 default: return check(f, rootOk);
             }
@@ -208,11 +210,239 @@ final class FileTools {
             String d = m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
             if (d == null || d.equals("0")) return "SUSPICIOUS media: no duration (may be damaged or unsupported codec)";
             String mime = m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
-            return "OK media, " + (Long.parseLong(d) / 1000) + " s" + (mime == null ? "" : ", " + mime);
+            return "header OK (metadata only: " + (Long.parseLong(d) / 1000) + " s" + (mime == null ? "" : ", " + mime)
+                + "). This does NOT prove the middle of the file is fine; use mode=media_deep for that.";
         } catch (Exception e) {
             return "DAMAGED or unsupported media: " + e.getMessage();
         } finally {
             try { m.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    // ---------------------------------------------------------------- a folder given to a per-file mode
+
+    private static boolean wanted(String mode, String n) {
+        n = n.toLowerCase(Locale.US);
+        switch (mode) {
+            case "media": return n.matches(".*\\.(mp4|mkv|avi|mov|3gp|webm|ts|m4v|mp3|m4a|aac|ogg|opus|wav|flac|amr)$");
+            case "exif": return n.matches(".*\\.(jpe?g|heic|dng)$");
+            case "archive": return n.matches(".*\\.(zip|rar|7z|apk|apks|xapk|jar)$");
+            default: return n.matches(".*\\.(pdf|docx?|xlsx?|pptx?|odt|ods)$");
+        }
+    }
+
+    /** Runs a per-file mode on every matching file in a folder (max 25), so a folder never looks like "one broken file". */
+    private static String forEach(File d, String mode) {
+        File[] l = d.listFiles();
+        if (l == null) return "cannot list " + d.getPath() + " (no permission)";
+        StringBuilder sb = new StringBuilder("FOLDER " + d.getPath() + " (mode " + mode + " runs per file):\n");
+        int n = 0;
+        for (File x : l) {
+            if (!x.isFile() || !wanted(mode, x.getName())) continue;
+            if (++n > 25) { sb.append("...more files not checked\n"); break; }
+            String r = mode.equals("media") ? media(x) : mode.equals("exif") ? exif(x) : mode.equals("archive") ? archive(x) : doc(x);
+            sb.append("- ").append(x.getName()).append(": ").append(r.replace("\n", " | ")).append('\n');
+        }
+        if (n == 0) sb.append("no matching files in this folder. Use find_files to locate the file.");
+        return sb.toString();
+    }
+
+    // ---------------------------------------------------------------- deep media scan: holes in the middle of a file
+
+    /**
+     * Reads EVERY sample of every track (no decoding) and looks for what makes "the picture freezes but the sound
+     * goes on": gaps in the video timestamps, a video track that ends early, unreadable or empty samples, and a
+     * resolution/profile the hardware decoder cannot handle.
+     */
+    private static String mediaDeep(File f) {
+        android.media.MediaExtractor ex = new android.media.MediaExtractor();
+        long end = System.currentTimeMillis() + 60000;
+        try {
+            ex.setDataSource(f.getPath());
+            int tracks = ex.getTrackCount();
+            StringBuilder sb = new StringBuilder("DEEP SCAN of " + f.getName() + " (" + mb(f.length()) + "), every sample read:\n");
+            long[] first = new long[tracks], last = new long[tracks], maxGap = new long[tracks], gapAt = new long[tracks], bytes = new long[tracks];
+            int[] count = new int[tracks], gaps = new int[tracks], empty = new int[tracks], sync = new int[tracks];
+            String[] mime = new String[tracks];
+            long[] expect = new long[tracks];
+            List<String> gapList = new ArrayList<String>();
+            for (int i = 0; i < tracks; i++) {
+                android.media.MediaFormat mf = ex.getTrackFormat(i);
+                mime[i] = mf.getString(android.media.MediaFormat.KEY_MIME);
+                ex.selectTrack(i);
+                first[i] = -1;
+                int fps = 0;
+                try { if (mf.containsKey(android.media.MediaFormat.KEY_FRAME_RATE)) fps = mf.getInteger(android.media.MediaFormat.KEY_FRAME_RATE); } catch (Exception ignored) { }
+                expect[i] = mime[i] != null && mime[i].startsWith("video/") ? (fps > 0 ? 1000000L / fps : 40000L) : 100000L;
+            }
+            java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(8 * 1024 * 1024);
+            String readErr = null;
+            boolean timeout = false;
+            while (true) {
+                int t = ex.getSampleTrackIndex();
+                if (t < 0) break;
+                if (System.currentTimeMillis() > end) { timeout = true; break; }
+                long pts = ex.getSampleTime();
+                int size;
+                try { buf.clear(); size = ex.readSampleData(buf, 0); } catch (Exception e) { readErr = "read error at " + (pts / 1000000) + "s in track " + t + ": " + e.getMessage(); break; }
+                if (size <= 0) empty[t]++; else bytes[t] += size;
+                if ((ex.getSampleFlags() & android.media.MediaExtractor.SAMPLE_FLAG_SYNC) != 0) sync[t]++;
+                if (first[t] < 0) first[t] = pts;
+                if (count[t] > 0) {
+                    long g = pts - last[t];
+                    if (g > Math.max(1000000L, expect[t] * 10)) {   // a hole of 1s+ (B-frames make small reorderings normal)
+                        gaps[t]++;
+                        if (gapList.size() < 15) gapList.add("track " + t + " (" + mime[t] + "): no data from " + fmt(last[t]) + " to " + fmt(pts) + " (" + (g / 1000) + " ms)");
+                        if (g > maxGap[t]) { maxGap[t] = g; gapAt[t] = last[t]; }
+                    }
+                }
+                if (pts > last[t]) last[t] = pts;
+                count[t]++;
+                if (!ex.advance()) break;
+            }
+            long longest = 0;
+            for (int i = 0; i < tracks; i++) longest = Math.max(longest, last[i]);
+            for (int i = 0; i < tracks; i++) {
+                android.media.MediaFormat mf = ex.getTrackFormat(i);
+                sb.append("track ").append(i).append(' ').append(mime[i]);
+                if (mf.containsKey(android.media.MediaFormat.KEY_WIDTH)) sb.append(' ').append(mf.getInteger(android.media.MediaFormat.KEY_WIDTH)).append('x').append(mf.getInteger(android.media.MediaFormat.KEY_HEIGHT));
+                long dur = last[i] - Math.max(0, first[i]);
+                sb.append(": ").append(count[i]).append(" samples, ").append(fmt(Math.max(0, first[i]))).append(" to ").append(fmt(last[i]));
+                if (dur > 0) sb.append(", avg ").append(bytes[i] * 8 / Math.max(1, dur / 1000000) / 1000).append(" kbps");
+                if (mime[i] != null && mime[i].startsWith("video/")) {
+                    sb.append(", keyframes ").append(sync[i]);
+                    if (sync[i] > 0 && dur > 0) sb.append(" (one every ").append(dur / sync[i] / 1000).append(" ms)");
+                    if (longest - last[i] > 3000000L) sb.append(" | VIDEO ENDS ").append((longest - last[i]) / 1000000).append(" s BEFORE THE AUDIO");
+                    if (android.os.Build.VERSION.SDK_INT >= 21 && mf.containsKey(android.media.MediaFormat.KEY_WIDTH))
+                        sb.append(" | ").append(Compat.decoderCan(mime[i], mf.getInteger(android.media.MediaFormat.KEY_WIDTH), mf.getInteger(android.media.MediaFormat.KEY_HEIGHT)));
+                }
+                if (gaps[i] > 0) sb.append(" | GAPS: ").append(gaps[i]).append(", longest ").append(maxGap[i] / 1000).append(" ms at ").append(fmt(gapAt[i]));
+                if (empty[i] > 0) sb.append(" | empty samples: ").append(empty[i]);
+                sb.append('\n');
+            }
+            if (!gapList.isEmpty()) sb.append("holes:\n  ").append(android.text.TextUtils.join("\n  ", gapList)).append('\n');
+            if (readErr != null) sb.append("READ ERROR: ").append(readErr).append(" (the file is damaged from this point)\n");
+            if (timeout) sb.append("(stopped after 60 s; the rest of the file was not scanned)\n");
+            sb.append("Note: this scan reads the compressed data; it cannot see damage INSIDE a frame's picture data, only missing/unreadable/mis-timed frames.\n");
+            return sb.toString();
+        } catch (Exception e) {
+            return "Cannot read the media container: " + e.getMessage();
+        } finally {
+            try { ex.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    private static String fmt(long us) {
+        long s = us / 1000000;
+        return String.format(Locale.US, "%d:%02d", s / 60, s % 60);
+    }
+
+    // ---------------------------------------------------------------- rebuild an MP4 without re-encoding
+
+    /**
+     * Copies the audio and video streams into a NEW clean MP4 (no re-encoding, so quality is identical and it is
+     * fast). Fixes broken indexes, bad interleaving and odd containers; it does not make the video lighter.
+     * Writes "<name>_fixed.mp4"; the original is not touched.
+     */
+    private static String remux(File f) {
+        if (android.os.Build.VERSION.SDK_INT < 18) return "FAILED: needs Android 4.3+";
+        android.media.MediaExtractor ex = new android.media.MediaExtractor();
+        android.media.MediaMuxer mx = null;
+        String name = f.getName();
+        int dot = name.lastIndexOf('.');
+        File out = new File(f.getParentFile(), (dot > 0 ? name.substring(0, dot) : name) + "_fixed.mp4");
+        try {
+            ex.setDataSource(f.getPath());
+            mx = new android.media.MediaMuxer(out.getPath(), android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            int n = ex.getTrackCount();
+            int[] map = new int[n];
+            int used = 0;
+            StringBuilder skipped = new StringBuilder();
+            for (int i = 0; i < n; i++) {
+                android.media.MediaFormat mf = ex.getTrackFormat(i);
+                String m = mf.getString(android.media.MediaFormat.KEY_MIME);
+                map[i] = -1;
+                try {
+                    map[i] = mx.addTrack(mf);
+                    ex.selectTrack(i);
+                    used++;
+                } catch (Exception e) {
+                    skipped.append(m).append(' ');
+                }
+            }
+            if (used == 0) { out.delete(); return "FAILED: no track can go into MP4 (" + skipped + "). Converting needs a converter app or a computer."; }
+            mx.start();
+            java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(8 * 1024 * 1024);
+            android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
+            long t0 = System.currentTimeMillis();
+            int samples = 0;
+            while (true) {
+                int t = ex.getSampleTrackIndex();
+                if (t < 0) break;
+                if (System.currentTimeMillis() - t0 > 240000) { mx.stop(); mx.release(); out.delete(); return "FAILED: took too long (file too big)"; }
+                int size = ex.readSampleData(buf, 0);
+                if (size > 0 && map[t] >= 0) {
+                    info.offset = 0;
+                    info.size = size;
+                    info.presentationTimeUs = ex.getSampleTime();
+                    info.flags = (ex.getSampleFlags() & android.media.MediaExtractor.SAMPLE_FLAG_SYNC) != 0 ? android.media.MediaCodec.BUFFER_FLAG_SYNC_FRAME : 0;
+                    mx.writeSampleData(map[t], buf, info);
+                    samples++;
+                }
+                if (!ex.advance()) break;
+            }
+            mx.stop();
+            mx.release();
+            mx = null;
+            return "OK new file " + out.getPath() + " (" + mb(out.length()) + ", " + samples + " samples, no re-encoding; original unchanged)"
+                + (skipped.length() > 0 ? ". Tracks left out (not allowed in MP4): " + skipped : "") + ". Ask the user to play the new file.";
+        } catch (Exception e) {
+            out.delete();
+            return "FAILED: " + e.getMessage();
+        } finally {
+            try { ex.release(); } catch (Exception ignored) { }
+            if (mx != null) { try { mx.release(); } catch (Exception ignored) { } }
+        }
+    }
+
+    // ---------------------------------------------------------------- find a file by (part of) its name, any language
+
+    static String find(android.content.Context c, String query, String kind) {
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        File root = android.os.Environment.getExternalStorageDirectory();
+        List<File> all = new ArrayList<File>();
+        long end = System.currentTimeMillis() + TIME_LIMIT;
+        findWalk(root, q, kind == null ? "" : kind, all, end, 0);
+        StringBuilder sb = new StringBuilder();
+        Collections.sort(all, new Comparator<File>() { public int compare(File a, File b) { return Long.compare(b.lastModified(), a.lastModified()); } });
+        for (int i = 0; i < Math.min(30, all.size()); i++) {
+            File f = all.get(i);
+            sb.append(f.getPath()).append("  (").append(mb(f.length())).append(", ")
+                .append(android.text.format.DateFormat.format("dd/MM/yyyy", f.lastModified())).append(")\n");
+        }
+        if (all.isEmpty()) {
+            File[] top = root.listFiles();
+            return "No files matching '" + query + "'" + (kind == null || kind.isEmpty() ? "" : " of type " + kind) + " under " + root.getPath()
+                + (top == null ? ". The app cannot list the storage: 'all files access' is missing (Settings > permissions)." : ". Try a shorter part of the name.")
+                + (System.currentTimeMillis() > end ? " (search time limit reached)" : "");
+        }
+        return "Found " + all.size() + (all.size() > 30 ? " (newest 30 shown)" : "") + ":\n" + sb;
+    }
+
+    private static void findWalk(File d, String q, String kind, List<File> out, long end, int depth) {
+        if (depth > 14 || System.currentTimeMillis() > end || out.size() > 300) return;
+        File[] l = d.listFiles();
+        if (l == null) return;
+        for (File x : l) {
+            if (x.isDirectory()) {
+                if (depth == 0 && x.getName().equals("Android")) findWalk(new File(x, "media"), q, kind, out, end, depth + 2);   // WhatsApp etc. keep media here
+                else findWalk(x, q, kind, out, end, depth + 1);
+                continue;
+            }
+            String n = x.getName().toLowerCase(Locale.ROOT);
+            if (!q.isEmpty() && !n.contains(q)) continue;
+            if (!kind.isEmpty() && !kind.equals("any") && !wanted(kind.equals("video") || kind.equals("audio") ? "media" : kind.equals("image") ? "exif" : kind, n)) continue;
+            out.add(x);
         }
     }
 
