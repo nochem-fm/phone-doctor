@@ -288,10 +288,57 @@ public class MainActivity extends Activity {
 
     TextView tv(String s, int sp, int color) {
         TextView t = new TextView(this);
-        t.setText(s);
+        t.setText(Build.VERSION.SDK_INT < 24 ? safeGlyphs(s) : s);
         t.setTextSize(sp);
         t.setTextColor(color);
         return t;
+    }
+
+    /** Old Android fonts lack many symbols and draw nothing for them; swap those for symbols that exist. */
+    static final java.util.HashMap<Character, Boolean> GLYPH_OK = new java.util.HashMap<Character, Boolean>();
+    static final android.graphics.Paint GLYPH_PAINT = new android.graphics.Paint();
+
+    static String safeGlyphs(String s) {
+        if (s == null) return null;
+        StringBuilder out = null;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch < 0x2190 || ch > 0x2BFF) { if (out != null) out.append(ch); continue; }
+            Boolean ok = GLYPH_OK.get(ch);
+            if (ok == null) {
+                android.graphics.Rect r = new android.graphics.Rect();
+                GLYPH_PAINT.setTextSize(48);
+                GLYPH_PAINT.getTextBounds(String.valueOf(ch), 0, 1, r);
+                ok = r.width() > 0 && r.height() > 0;
+                GLYPH_OK.put(ch, ok);
+            }
+            if (ok) { if (out != null) out.append(ch); continue; }
+            if (out == null) out = new StringBuilder(s.substring(0, i));
+            out.append(glyphFallback(ch));
+        }
+        return out == null ? s : out.toString();
+    }
+
+    static String glyphFallback(char ch) {
+        switch (ch) {
+            case '\u2713': return "\u221A";            // ✓ -> √
+            case '\u2717': case '\u2715': return "\u00D7"; // ✗ ✕ -> ×
+            case '\u2630': case '\u25A4': return "\u2261"; // ☰ ▤ -> ≡
+            case '\u2699': return "*";
+            case '\u2726': return "\u2022";            // ✦ -> •
+            case '\u270E': return "\u203A";            // ✎ -> ›
+            case '\u2315': return "?";
+            case '\u25A3': case '\u25A0': return "\u25A0";
+            case '\u25C9': case '\u25CF': return "\u2022";
+            case '\u25CB': return "o";
+            case '\u25B6': case '\u25C2': return ch == '\u25B6' ? ">" : "<";
+            case '\u25BE': return "v";
+            case '\u26A0': return "!";
+            case '\u21A9': return "\u2190";
+            case '\u2191': return "^";
+            case '\u2192': return ">";
+            default: return "\u2022";
+        }
     }
 
     GradientDrawable rr(int color, int radiusDp) {
@@ -334,11 +381,13 @@ public class MainActivity extends Activity {
         return t;
     }
 
+    View glyph(int type, int color) { return new Glyph(this, type, color, dp(48)); }
+
     View topBar(String title) {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(8), dp(12), dp(12), dp(8));
-        TextView back = icon("\u2192", TXT);
+        View back = glyph(Glyph.BACK, TXT);
         click(back, new Runnable() { public void run() { showChat(); } });
         TextView t = tv(title, 20, TXT);
         bar.addView(back);
@@ -571,7 +620,7 @@ public class MainActivity extends Activity {
         boolean[] ok = {rootOk, missingRuntime().isEmpty(), filesOk(), hasUsage(), overlayOk(), batteryOk(), isAccessOn(), !assistSupported() || isAssistant()};
         for (int i = 0; i < ok.length; i++) {
             boolean sk = skipped.contains(String.valueOf(i)) && !ok[i];
-            rowIcon[i].setText(ok[i] ? "\u2713" : sk ? "\u2014" : "\u25CB");
+            rowIcon[i].setText(safeGlyphs(ok[i] ? "\u2713" : sk ? "\u2014" : "\u25CB"));
             rowIcon[i].setTextColor(ok[i] ? GOOD : DIM);
             rowSub[i].setText(i == 0 && rootBusy != null ? rootBusy : ROWS[i][1]);
             rowSkip[i].setVisibility(ok[i] ? View.INVISIBLE : View.VISIBLE);
@@ -695,12 +744,12 @@ public class MainActivity extends Activity {
         head.setPadding(0, dp(10), 0, dp(10));
         final LinearLayout body = vert();
         body.setVisibility(adbOpen ? View.VISIBLE : View.GONE);
-        head.setText(title + "  " + (adbOpen ? "\u25BE" : "\u25C2"));
+        head.setText(safeGlyphs(title + "  " + (adbOpen ? "\u25BE" : "\u25C2")));
         click(head, new Runnable() {
             public void run() {
                 adbOpen = !adbOpen;
                 body.setVisibility(adbOpen ? View.VISIBLE : View.GONE);
-                head.setText(title + "  " + (adbOpen ? "\u25BE" : "\u25C2"));
+                head.setText(safeGlyphs(title + "  " + (adbOpen ? "\u25BE" : "\u25C2")));
             }
         });
         for (int ci = 0; ci < cmds.length; ci++) {
@@ -980,12 +1029,12 @@ public class MainActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(8), dp(12), dp(8), dp(8));
-        TextView menu = icon("\u2630", DIM);
+        View menu = glyph(Glyph.MENU, DIM);
         click(menu, new Runnable() { public void run() { showHistory(); } });
         TextView title = tv("Phone Doctor", 20, TXT);
-        TextView plus = icon("\uFF0B", TXT);
+        View plus = glyph(Glyph.PLUS, TXT);
         click(plus, new Runnable() { public void run() { newChat(); } });
-        TextView gear = icon("\u2699", DIM);
+        View gear = glyph(Glyph.GEAR, DIM);
         click(gear, new Runnable() { public void run() { showSettings(); } });
         bar.addView(menu);
         bar.addView(title, lp(0, W, 1f));
@@ -1131,7 +1180,7 @@ public class MainActivity extends Activity {
         if (greeting != null) greeting.setVisibility(View.GONE);
         renderEntry(e, true);
         if (e.optString("k").equals("u")) {
-            sendBtn.setText("\u25A0");
+            sendBtn.setText(safeGlyphs("\u25A0"));
             keepScreen(true);
         }
     }
@@ -1191,7 +1240,7 @@ public class MainActivity extends Activity {
     }
 
     void onFinished() {
-        if (sendBtn != null) sendBtn.setText("\u2191");
+        if (sendBtn != null) sendBtn.setText(safeGlyphs("\u2191"));
         updateQueueBtn();
         keepScreen(false);
         if (screen.equals("chat")) updateLive();
@@ -1293,13 +1342,13 @@ public class MainActivity extends Activity {
         String chev = open ? "\u25BE" : "\u25C2";
         if (live && Core.running) {
             head.setVisibility(View.VISIBLE);
-            head.setText("\u25CF " + Core.status + "   " + chev);
+            head.setText(safeGlyphs("\u25CF " + Core.status + "   " + chev));
             head.setTextColor(ACC);
         } else if (n == 0) {
             head.setVisibility(View.GONE);
         } else {
             head.setVisibility(View.VISIBLE);
-            head.setText("\u2713 " + n + " שלבים   " + chev);
+            head.setText(safeGlyphs("\u2713 " + n + " שלבים   " + chev));
             head.setTextColor(DIM);
         }
     }
@@ -1970,7 +2019,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 2.5", 12, DIM);
+        TextView about = tv("Phone Doctor 2.6", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
