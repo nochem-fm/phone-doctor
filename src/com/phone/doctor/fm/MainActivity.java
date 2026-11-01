@@ -68,7 +68,7 @@ public class MainActivity extends Activity {
     boolean light;
     static final int SEND = 0xFFD96570; // same red as the title gradient
     static final int M = -1, W = -2;
-    static final String DEF_MODEL = "gemini-2.5-flash-lite";
+    static final String DEF_MODEL = "gemini-2.5-flash";
 
     SharedPreferences prefs;
     Store store;
@@ -1850,7 +1850,10 @@ public class MainActivity extends Activity {
                     StringBuilder sb = new StringBuilder();
                     for (String s : m) sb.append(s).append('\n');
                     SharedPreferences.Editor ed = prefs.edit().putString("models", sb.toString().trim());
-                    if (!prefs.contains("fbmodels")) ed.putString("fbmodels", sb.toString().trim());   // default: every model is a backup
+                    if (!prefs.contains("fbmodels")) {   // default: flash-lite first, then every other model as backup
+                        String all = sb.toString().trim();
+                        ed.putString("fbmodels", (m.contains("gemini-2.5-flash-lite") ? "gemini-2.5-flash-lite\n" : "") + all.replace("gemini-2.5-flash-lite\n", "").replace("\ngemini-2.5-flash-lite", ""));
+                    }
                     ed.apply();
                     runOnUiThread(new Runnable() { public void run() { cb.got(m); } });
                 } catch (final Exception e) {
@@ -2075,15 +2078,15 @@ public class MainActivity extends Activity {
         c.addView(sw("מצב מכסה חינמית: להמתין ולנסות שוב במקום להיכשל", prefs.getBoolean("free", true), "free"));
         LinearLayout rr = new LinearLayout(this);
         rr.setGravity(Gravity.CENTER_VERTICAL);
-        rr.addView(tv("מקסימום בקשות בדקה", 15, TXT), lp(0, W, 1f));
+        rr.addView(tv("מקסימום בקשות בדקה לכל מודל", 15, TXT), lp(0, W, 1f));
         EditText rpm = field("5", String.valueOf(prefs.getInt("rpm", 5)), false, InputType.TYPE_CLASS_NUMBER);
         rpm.setInputType(InputType.TYPE_CLASS_NUMBER);
         rpm.setGravity(Gravity.CENTER);
         bind(rpm, "rpm", true);
         rr.addView(rpm, new LinearLayout.LayoutParams(dp(64), W));
         c.addView(rr);
-        c.addView(note("כשהמגבלה מתמלאת, השיחה ממתינה ממשיכה לבד ולא נעצרת. אם נגמרה המכסה היומית היא עוברת למודל גיבוי, "
-            + "ואם אין כזה, נשמרת ואפשר להמשיך אחר כך. בחשבון בתשלום אפשר לכבות את המצב."));
+        c.addView(note("כשמודל מגיע למגבלת הדקה או למכסה היומית, הסוכן עובר מיד למודל הגיבוי הבא. הוא ממתין רק כשכל המודלים תפוסים באותה דקה, "
+            + "ואם המכסה היומית נגמרה בכולם, השיחה נשמרת ואפשר להמשיך אחר כך. בחשבון בתשלום אפשר לכבות את המצב."));
 
         // --- agent
         c = card(list, "התנהגות הסוכן");

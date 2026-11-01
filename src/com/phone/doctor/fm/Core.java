@@ -97,13 +97,13 @@ final class Core {
         boolean free = p.getBoolean("free", true);
         agent.rootOk = p.getBoolean("root", false);
         agent.key = p.getString("key", "");
-        agent.model = p.getString("model", "gemini-2.5-flash-lite");
+        agent.model = p.getString("model", "gemini-2.5-flash");
         agent.retry = free;
         agent.rpm = free ? p.getInt("rpm", 5) : 0;
         agent.fallbackOn = p.getBoolean("fb", true);
         List<String> fb = new ArrayList<String>();
         // default (never edited): every model the key can use is a backup
-        String fbs = p.contains("fbmodels") ? p.getString("fbmodels", "") : p.getString("models", "");
+        String fbs = p.contains("fbmodels") ? p.getString("fbmodels", "") : "gemini-2.5-flash-lite\n" + p.getString("models", "");
         for (String s : fbs.split("\n")) if (!s.trim().isEmpty()) fb.add(s.trim());
         agent.fallbacks = fb;
         agent.auto = p.getBoolean("auto", false);

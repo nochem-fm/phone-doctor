@@ -56,13 +56,16 @@ final class Agent {
 
     private static final String BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
     private static final Map<String, Long> UNTIL = new HashMap<String, Long>();
-    private static final ArrayDeque<Long> SENT = new ArrayDeque<Long>();
+    /** Requests sent in the last minute, per model (the free tier limits each model separately). */
+    private static final Map<String, ArrayDeque<Long>> SENT = new HashMap<String, ArrayDeque<Long>>();
+    /** Short per-minute cool-down after a 429 (UNTIL is for daily quota / removed models). */
+    private static final Map<String, Long> COOL = new HashMap<String, Long>();
 
     final Context ctx;
     final UI ui;
     boolean rootOk;
     String key = "";
-    String model = "gemini-2.5-flash-lite";
+    String model = "gemini-2.5-flash";
     volatile boolean stop;
     private volatile HttpURLConnection cur;
 
@@ -687,12 +690,11 @@ final class Agent {
 
     private JSONObject post(JSONObject body) throws Exception {
         byte[] data = body.toString().getBytes("UTF-8");
-        int srv = 0, tmo = 0;
+        int srv = 0, tmo = 0, sw = 0;
         int sigTries = 0;
         for (int attempt = 0; attempt < 14; attempt++) {
             String m = pickModel();
             if (!m.startsWith("gemini-1") && !m.startsWith("gemini-2") && contents.length() > 0) { addDummySignatures(); data = body.toString().getBytes("UTF-8"); }
-            throttle();
             int code;
             String s;
             try {
@@ -728,8 +730,11 @@ final class Agent {
                 long delay = parseDelayMs(msg);
                 boolean daily = low.contains("per day") || low.contains("perday") || delay > 300000L;
                 if (daily) { UNTIL.put(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); continue; }
-                if (!retry) throw new QuotaException("חרגת ממגבלת הקצב של " + m + ". נסה שוב בעוד " + (delay / 1000 + 1) + " שניות.");
-                waitMs("מגבלת קצב, ממתין", delay + 1000);
+                // per-minute limit: put this model aside for a moment and switch to the next one right away
+                COOL.put(m, System.currentTimeMillis() + delay + 1000);
+                if (!retry && !hasOtherModel(m)) throw new QuotaException("חרגת ממגבלת הקצב של " + m + ". נסה שוב בעוד " + (delay / 1000 + 1) + " שניות.");
+                attempt--;   // switching models is not a failed attempt
+                if (++sw > 40) throw new QuotaException("כל המודלים עמוסים כרגע. השיחה נשמרה, נסה שוב בעוד דקה.");
                 continue;
             }
             if (code == 404) { UNTIL.put(m, System.currentTimeMillis() + 86400000L); continue; } // model removed/unavailable
@@ -756,20 +761,63 @@ final class Agent {
     }
 
     /** Primary model, or the first backup that still works. */
-    private String pickModel() throws QuotaException {
-        String cur = clean(model);
+    private List<String> candidates() {
+        List<String> all = new ArrayList<String>();
+        all.add(clean(model));
+        if (fallbackOn) for (String f : fallbacks) { f = clean(f); if (!f.isEmpty() && !all.contains(f)) all.add(f); }
+        return all;
+    }
+
+    private boolean hasOtherModel(String m) {
+        for (String c : candidates()) if (!c.equals(m) && !exhausted(c)) return true;
+        return false;
+    }
+
+    /** Time (ms) until model m may be used again because of the per-minute limits; 0 = now. */
+    private long busyFor(String m, long now) {
+        long w = 0;
+        Long c = COOL.get(m);
+        if (c != null && c > now) w = c - now;
+        if (rpm > 0) {
+            ArrayDeque<Long> q = SENT.get(m);
+            if (q != null) {
+                while (!q.isEmpty() && now - q.peekFirst() >= 60000L) q.pollFirst();
+                if (q.size() >= rpm) w = Math.max(w, 60000L - (now - q.peekFirst()) + 300);
+            }
+        }
+        return w;
+    }
+
+    /**
+     * The first model (main, then backups in order) that is not out of daily quota and is free right now.
+     * Only when EVERY model is busy for the minute does it wait, and then for the one that frees up first.
+     */
+    private String pickModel() throws QuotaException, Stopped {
         String use = null;
-        if (!exhausted(cur)) use = cur;
-        else if (fallbackOn) for (String f : fallbacks) { f = clean(f); if (!f.isEmpty() && !exhausted(f)) { use = f; break; } }
-        if (use == null) {
-            long left = Long.MAX_VALUE;
-            List<String> all = new ArrayList<String>();
-            all.add(cur);
-            if (fallbackOn) all.addAll(fallbacks);
-            for (String m : all) { Long t = UNTIL.get(clean(m)); if (t != null) left = Math.min(left, t - System.currentTimeMillis()); }
-            long mins = Math.max(1, left / 60000L);
-            throw new QuotaException("המכסה היומית נגמרה (או שהמודל הוסר) בכל המודלים שנבחרו. תתאפס בעוד כ-" + (mins / 60) + " שעות ו-" + (mins % 60)
-                + " דקות. השיחה נשמרה: אפשר להמשיך אחר כך, להוסיף מודלי גיבוי או להחליף מפתח בהגדרות.");
+        while (true) {
+            long now = System.currentTimeMillis(), soonest = Long.MAX_VALUE;
+            boolean anyAlive = false;
+            for (String m : candidates()) {
+                if (exhausted(m)) continue;
+                anyAlive = true;
+                long w = busyFor(m, now);
+                if (w == 0) { use = m; break; }
+                soonest = Math.min(soonest, w);
+            }
+            if (use != null) break;
+            if (!anyAlive) {
+                long left = Long.MAX_VALUE;
+                for (String m : candidates()) { Long t = UNTIL.get(m); if (t != null) left = Math.min(left, t - now); }
+                long mins = Math.max(1, left / 60000L);
+                throw new QuotaException("המכסה היומית נגמרה (או שהמודל הוסר) בכל המודלים שנבחרו. תתאפס בעוד כ-" + (mins / 60) + " שעות ו-" + (mins % 60)
+                    + " דקות. השיחה נשמרה: אפשר להמשיך אחר כך, להוסיף מודלי גיבוי או להחליף מפתח בהגדרות.");
+            }
+            waitMs("כל המודלים הגיעו למגבלת הדקה, ממתין", soonest);
+        }
+        if (rpm > 0) {
+            ArrayDeque<Long> q = SENT.get(use);
+            if (q == null) { q = new ArrayDeque<Long>(); SENT.put(use, q); }
+            q.addLast(System.currentTimeMillis());
         }
         if (!use.equals(lastModel)) {
             if (!lastModel.isEmpty()) ui.status("עובר למודל " + use);
@@ -802,17 +850,6 @@ final class Agent {
     }
 
     /** Keeps us under the requests-per-minute limit so free-tier chats never die mid-way. */
-    private void throttle() throws Stopped {
-        if (rpm <= 0) return;
-        while (true) {
-            long now = System.currentTimeMillis();
-            while (!SENT.isEmpty() && now - SENT.peekFirst() >= 60000L) SENT.pollFirst();
-            if (SENT.size() < rpm) break;
-            waitMs("ממתין למגבלת הקצב של הגרסה החינמית", 60000L - (now - SENT.peekFirst()) + 300);
-        }
-        SENT.addLast(System.currentTimeMillis());
-    }
-
     /** Every automatic error shown to the user is in Hebrew. */
     static String hebrew(Throwable e) {
         if (e instanceof QuotaException) return e.getMessage();
