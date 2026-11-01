@@ -29,6 +29,33 @@ final class Compat {
 
     static boolean allFiles() { return android.os.Environment.isExternalStorageManager(); }
 
+    static final int SIGNING_FLAG = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES;
+
+    static android.content.pm.Signature[] signers(PackageInfo pi) {
+        android.content.pm.SigningInfo si = pi.signingInfo;
+        if (si == null) return null;
+        return si.hasMultipleSigners() ? si.getApkContentsSigners() : si.getSigningCertificateHistory();
+    }
+
+    static int minSdk(android.content.pm.ApplicationInfo ai) { return ai.minSdkVersion; }
+
+    static String[] abis() { return Build.SUPPORTED_ABIS; }
+
+    /** Page count with the system PDF renderer; a password-protected PDF throws SecurityException. */
+    static String pdfPages(java.io.File f) {
+        try {
+            android.os.ParcelFileDescriptor fd = android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+            android.graphics.pdf.PdfRenderer r = new android.graphics.pdf.PdfRenderer(fd);
+            int n = r.getPageCount();
+            r.close();
+            return n + " pages";
+        } catch (SecurityException e) {
+            return "PASSWORD-PROTECTED pdf";
+        } catch (Exception e) {
+            return "the PDF renderer cannot open it: " + e.getMessage();
+        }
+    }
+
     static int immutable() {
         return Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
     }

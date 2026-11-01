@@ -211,6 +211,8 @@ final class Agent {
                 case "app_backup": appBackup(args, out); break;
                 case "app_restore": appRestore(args, out); break;
                 case "app_backups": appBackups(args, out); break;
+                case "apk_info": apkInfo(args, out); break;
+                case "apk_install": apkInstall(args, out); break;
                 default: out.put("error", "unknown tool " + name);
             }
         } catch (Stopped s) {
@@ -852,6 +854,54 @@ final class Agent {
         ui.stepDone(st, r.startsWith("OK"), r, null);
     }
 
+    // ---------------------------------------------------------------- APK files
+
+    private void apkInfo(JSONObject a, JSONObject out) throws Exception {
+        String path = a.getString("path");
+        int st = ui.step("cmd", a.optString("purpose", "בודק קובץ התקנה"), "apk_info " + path);
+        ui.status("מנתח את קובץ ההתקנה…");
+        actions++;
+        String r = ApkTools.info(ctx, path, rootOk);
+        out.put("result", r);
+        ui.stepDone(st, !r.startsWith("Cannot") && !r.contains("NOT A VALID APK"), r, null);
+    }
+
+    private void apkInstall(JSONObject a, JSONObject out) throws Exception {
+        String path = a.getString("path");
+        boolean down = a.optBoolean("allow_downgrade", false);
+        String purpose = a.optString("purpose", "התקנת אפליקציה");
+        int st = ui.step("cmd", purpose, "apk_install " + path);
+        String pkg = null;
+        try {
+            PackageInfo pi = ctx.getPackageManager().getPackageArchiveInfo(path, 0);
+            if (pi != null) pkg = pi.packageName;
+        } catch (Exception ignored) { }
+        boolean installed = false;
+        if (pkg != null) { try { ctx.getPackageManager().getPackageInfo(pkg, 0); installed = true; } catch (Exception ignored) { } }
+        String note = rootOk ? (installed ? "עדכון של אפליקציה קיימת. לפני ההתקנה יישמר גיבוי שלה." : "התקנה חדשה. אפשר לבטל (הסרה) מיומן השינויים.")
+            : "בלי root ייפתח מתקין המערכת, ושם צריך ללחוץ \"התקן\".";
+        if (!allow(purpose, "[התקנת אפליקציה] " + path + (down ? " (כולל שנמוך גרסה)" : "") + "\n\n" + note, rootOk, "dangerous", true)) {
+            out.put("result", "USER_DENIED");
+            ui.stepDone(st, false, "נדחה על ידך", null);
+            return;
+        }
+        ui.status("מתקין…");
+        actions++;
+        String pre = "";
+        if (rootOk && installed) pre = AppBackup.backup(ctx, pkg, true, "before install");
+        String r = ApkTools.install(ctx, path, rootOk, down);
+        if (pre.startsWith("OK")) r += "\nThe previous version was backed up first: " + pre.substring(3).split(" ")[0] + " (app_restore brings it back).";
+        out.put("result", r);
+        ui.stepDone(st, r.startsWith("OK") || r.startsWith("OPENED"), r, null);
+        if (r.startsWith("OK") && pkg != null && !installed) {
+            Journal.Plan pl = new Journal.Plan();
+            pl.level = 1;
+            pl.undo.add("pm uninstall " + pkg);
+            long jid = Journal.add(purpose, "install " + path, true, pl, 0);
+            if (jid != 0) ui.stepUndo(st, jid, 1);
+        }
+    }
+
     private void appBackups(JSONObject a, JSONObject out) throws Exception {
         out.put("result", AppBackup.list(ctx, a.optString("package", "")));
     }
@@ -944,6 +994,7 @@ final class Agent {
             + "OVER TIME: use wait_and_recheck to compare a reading after some seconds/minutes, and schedule_followup when the effect shows only after hours or a reboot.\n"
             + "SCREEN SETTINGS: for a setting that has no shell command, use screen_sequence (one approval for the whole path, with 'expect' checks).\n"
             + "FILES: for a file that will not open, inspect_files mode=check first; for full storage use mode=usage and mode=duplicates.\n"
+            + "APK FILES: for 'the app does not install' or a downloaded APK, run apk_info first (compatibility, signature, fake check), then apk_install.\n"
             + "APP CRASHES: use reproduce_app first: one call opens the app and returns whether it stayed alive, the crash log, memory and a screenshot.\n"
             + "CHOICES: when the user must decide between options (for example clear cache / clear data / do nothing), use ask_user with buttons instead of asking in text.\n"
             + "NOTIFICATIONS: for 'notifications do not arrive', use notification_history to see whether the app posted notifications at all.\n"
@@ -1008,8 +1059,11 @@ final class Agent {
                 + "'expect <text>' (stops if that text is not on the screen). Returns a log and the screen text at the end. Use it to change settings that have no shell command.",
             new String[][]{{"steps", "string", "Steps, one per line."}, {"purpose", "string", "Short Hebrew sentence."}}, "steps", "purpose"));
         d.put(fn("inspect_files", "Read-only file diagnostics. mode=check: is a file (or every file in a folder) damaged? Detects the real type from the content, wrong extension, empty or cut files, broken archives/images/PDF/media. "
-                + "mode=usage: what takes the space in a folder. mode=duplicates: duplicate files and how much space they waste.",
-            new String[][]{{"path", "string", "File or folder, e.g. /sdcard/Download or /sdcard/DCIM/Camera/x.jpg"}, {"mode", "string", "check, usage or duplicates"},
+                + "mode=usage: what takes the space in a folder. mode=duplicates: duplicate files and how much space they waste. "
+                + "mode=archive: list a ZIP's content, damaged or password-protected entries. mode=exif: photo camera/date/LOCATION. mode=strip_location: writes a copy of a JPEG without location (original unchanged). "
+                + "mode=media: codecs, resolution, and whether this phone has a decoder (why a video will not play). mode=large: files over 50 MB, marking ones unchanged 90+ days. "
+                + "mode=downloads: repeated downloads like 'file (1).pdf' in a folder. mode=doc: PDF pages/password, Office type, encrypted Office files. mode=deleted: recycle-bin files still on the phone (.trashed-*, gallery bins).",
+            new String[][]{{"path", "string", "File or folder, e.g. /sdcard/Download or /sdcard/DCIM/Camera/x.jpg"}, {"mode", "string", "check, usage, duplicates, archive, exif, strip_location, media, large, downloads, doc or deleted"},
                 {"purpose", "string", "Short Hebrew sentence."}}, "path", "mode", "purpose"));
         d.put(fn("reproduce_app", "One call to reproduce an app problem: (with root force-stops it,) launches it, waits N seconds, then returns whether the process is still alive, the foreground activity, crash/error log lines since launch, memory, and a screenshot.",
             new String[][]{{"package", "string", "Package name."}, {"seconds", "number", "4-30, default 8."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
@@ -1021,6 +1075,10 @@ final class Agent {
             new String[][]{{"package", "string", "Package name."}, {"note", "string", "Optional short note."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
         d.put(fn("app_restore", "Restore an app from a backup (root): reinstalls that version and puts its data back. The current state is backed up first.",
             new String[][]{{"backup_id", "string", "From app_backup or app_backups."}, {"purpose", "string", "Short Hebrew sentence."}}, "backup_id", "purpose"));
+        d.put(fn("apk_info", "Analyze an APK/.apks/.xapk FILE before installing: package, version, min/target SDK vs this phone, CPU ABIs vs this phone, split-part detection, signer and certificate SHA-256 (debug key?), comparison with the installed version (downgrade, different signer = cannot update / possible fake, new permissions), sensitive permissions, red flags (accessibility/admin/notification access, impersonation of a known app), file SHA-256, and a clear VERDICT.",
+            new String[][]{{"path", "string", "Path of the file, e.g. /sdcard/Download/app.apk"}, {"purpose", "string", "Short Hebrew sentence."}}, "path", "purpose"));
+        d.put(fn("apk_install", "Install an .apk, or with root also a bundle (.apks/.xapk incl. OBB). With root: pm install, failures explained; an existing app is backed up first. Without root: opens the system installer for a single .apk. Run apk_info first.",
+            new String[][]{{"path", "string", "Path of the file."}, {"allow_downgrade", "boolean", "Allow installing an older version (root)."}, {"purpose", "string", "Short Hebrew sentence."}}, "path", "purpose"));
         d.put(fn("app_backups", "List existing app backups.",
             new String[][]{{"package", "string", "Optional package filter."}}));
         b.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", d)));

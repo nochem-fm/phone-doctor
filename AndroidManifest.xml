@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.phone.doctor.fm"
-    android:versionCode="43"
-    android:versionName="4.3">
+    android:versionCode="44"
+    android:versionName="4.4">
 
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="33" />
 
@@ -31,6 +31,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- granted automatically through root (pm grant) -->
     <uses-permission android:name="android.permission.READ_LOGS" />
     <uses-permission android:name="android.permission.DUMP" />
@@ -63,6 +64,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- hands an APK to the system installer (no root) -->
+        <provider
+            android:name=".FilesProvider"
+            android:authorities="com.phone.doctor.fm.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <!-- notification history (metadata only) -->
         <service

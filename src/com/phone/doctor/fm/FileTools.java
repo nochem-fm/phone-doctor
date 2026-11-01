@@ -31,6 +31,14 @@ final class FileTools {
             switch (mode == null ? "check" : mode) {
                 case "usage": return usage(f, rootOk);
                 case "duplicates": return duplicates(f);
+                case "archive": return archive(f);
+                case "exif": return exif(f);
+                case "strip_location": return stripLocation(f);
+                case "media": return media(f);
+                case "large": return large(f, 50);
+                case "downloads": return downloadCopies(f);
+                case "doc": return doc(f);
+                case "deleted": return deleted(f);
                 default: return check(f, rootOk);
             }
         } catch (Throwable t) {
@@ -206,6 +214,243 @@ final class FileTools {
         } finally {
             try { m.release(); } catch (Exception ignored) { }
         }
+    }
+
+    // ---------------------------------------------------------------- archives
+
+    private static String archive(File f) {
+        byte[] h = new byte[16];
+        int n = 0;
+        try { InputStream in = new FileInputStream(f); n = in.read(h); in.close(); } catch (Exception e) { return "READ ERROR: " + e.getMessage(); }
+        String t = type(h, n);
+        if (t.equals("rar") || t.equals("7z")) return t.toUpperCase(Locale.US) + " archive, " + mb(f.length()) + ". Listing its content needs an app such as ZArchiver; the header is valid.";
+        if (!t.equals("zip")) return "Not a ZIP/RAR/7z archive (content looks like: " + t + ").";
+        StringBuilder sb = new StringBuilder();
+        try {
+            ZipFile z = new ZipFile(f);
+            int cnt = 0, bad = 0, enc = 0;
+            long total = 0;
+            byte[] b = new byte[16384];
+            for (Enumeration<? extends ZipEntry> e = z.entries(); e.hasMoreElements(); ) {
+                ZipEntry en = e.nextElement();
+                cnt++;
+                total += Math.max(0, en.getSize());
+                String st = "";
+                if (!en.isDirectory()) {
+                    try {
+                        InputStream in = z.getInputStream(en);
+                        while (in.read(b) > 0) { }
+                        in.close();
+                    } catch (Exception ex) {
+                        String m = String.valueOf(ex.getMessage()).toLowerCase(Locale.US);
+                        if (m.contains("encrypt")) { enc++; st = " [PASSWORD-PROTECTED]"; } else { bad++; st = " [DAMAGED: " + ex.getMessage() + "]"; }
+                    }
+                }
+                if (cnt <= 60) sb.append("  ").append(en.getName()).append(en.isDirectory() ? "" : " (" + (en.getSize() >> 10) + " KB)").append(st).append('\n');
+            }
+            z.close();
+            return "ZIP: " + cnt + " entries, " + mb(total) + " uncompressed, damaged " + bad + ", password-protected " + enc + "\n" + sb
+                + (cnt > 60 ? "  ...\n" : "");
+        } catch (Exception e) {
+            String m = String.valueOf(e.getMessage());
+            return "DAMAGED or unsupported ZIP (" + m + "). If it was downloaded, the download was probably cut; download it again.";
+        }
+    }
+
+    // ---------------------------------------------------------------- photos
+
+    private static String exif(File f) {
+        try {
+            android.media.ExifInterface x = new android.media.ExifInterface(f.getPath());
+            StringBuilder sb = new StringBuilder("EXIF of " + f.getName() + ":\n");
+            String[][] tags = {{android.media.ExifInterface.TAG_MAKE, "make"}, {android.media.ExifInterface.TAG_MODEL, "model"},
+                {android.media.ExifInterface.TAG_DATETIME, "date"}, {android.media.ExifInterface.TAG_ORIENTATION, "orientation"},
+                {android.media.ExifInterface.TAG_IMAGE_WIDTH, "width"}, {android.media.ExifInterface.TAG_IMAGE_LENGTH, "height"},
+                {"Software", "software"}};
+            for (String[] t : tags) { String v = x.getAttribute(t[0]); if (v != null) sb.append(t[1]).append(": ").append(v).append('\n'); }
+            float[] ll = new float[2];
+            if (x.getLatLong(ll)) sb.append("LOCATION: ").append(ll[0]).append(", ").append(ll[1]).append(" (the photo reveals where it was taken; strip_location makes a copy without it)\n");
+            else sb.append("location: none\n");
+            return sb.toString();
+        } catch (Exception e) {
+            return "No EXIF (not a JPEG/supported image, or damaged): " + e.getMessage();
+        }
+    }
+
+    /** Never touches the original: writes "<name>_no_location.jpg" next to it. */
+    private static String stripLocation(File f) {
+        try {
+            String name = f.getName();
+            int dot = name.lastIndexOf('.');
+            File out = new File(f.getParentFile(), (dot > 0 ? name.substring(0, dot) : name) + "_no_location" + (dot > 0 ? name.substring(dot) : ".jpg"));
+            FileInputStream in = new FileInputStream(f);
+            java.io.FileOutputStream o = new java.io.FileOutputStream(out);
+            byte[] b = new byte[65536];
+            int n;
+            while ((n = in.read(b)) > 0) o.write(b, 0, n);
+            in.close();
+            o.close();
+            android.media.ExifInterface x = new android.media.ExifInterface(out.getPath());
+            String[] gps = {"GPSLatitude", "GPSLatitudeRef", "GPSLongitude", "GPSLongitudeRef", "GPSAltitude", "GPSAltitudeRef", "GPSTimeStamp", "GPSDateStamp", "GPSProcessingMethod"};
+            for (String g : gps) x.setAttribute(g, null);
+            x.saveAttributes();
+            float[] ll = new float[2];
+            return x.getLatLong(ll) ? "FAILED: location could not be removed from " + out.getPath() : "OK copy without location: " + out.getPath() + " (original unchanged)";
+        } catch (Exception e) {
+            return "FAILED: " + e.getMessage() + " (only JPEG is supported)";
+        }
+    }
+
+    // ---------------------------------------------------------------- video / audio: codec and whether this phone can play it
+
+    private static boolean hasDecoder(String mime) {
+        try {
+            int n = android.media.MediaCodecList.getCodecCount();
+            for (int i = 0; i < n; i++) {
+                android.media.MediaCodecInfo ci = android.media.MediaCodecList.getCodecInfoAt(i);
+                if (ci.isEncoder()) continue;
+                for (String t : ci.getSupportedTypes()) if (t.equalsIgnoreCase(mime)) return true;
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
+    private static String media(File f) {
+        android.media.MediaExtractor ex = new android.media.MediaExtractor();
+        try {
+            ex.setDataSource(f.getPath());
+            StringBuilder sb = new StringBuilder(f.getName() + ": " + ex.getTrackCount() + " tracks\n");
+            for (int i = 0; i < ex.getTrackCount(); i++) {
+                android.media.MediaFormat mf = ex.getTrackFormat(i);
+                String mime = mf.getString(android.media.MediaFormat.KEY_MIME);
+                sb.append("  ").append(mime);
+                if (mf.containsKey(android.media.MediaFormat.KEY_WIDTH)) sb.append(' ').append(mf.getInteger(android.media.MediaFormat.KEY_WIDTH)).append('x').append(mf.getInteger(android.media.MediaFormat.KEY_HEIGHT));
+                if (mf.containsKey(android.media.MediaFormat.KEY_FRAME_RATE)) { try { sb.append(' ').append(mf.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)).append("fps"); } catch (Exception ignored) { } }
+                if (mf.containsKey(android.media.MediaFormat.KEY_SAMPLE_RATE)) sb.append(' ').append(mf.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)).append("Hz");
+                if (mf.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT)) sb.append(' ').append(mf.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)).append("ch");
+                if (mf.containsKey(android.media.MediaFormat.KEY_DURATION)) sb.append(' ').append(mf.getLong(android.media.MediaFormat.KEY_DURATION) / 1000000).append('s');
+                boolean dec = mime != null && (mime.startsWith("video/") || mime.startsWith("audio/")) ? hasDecoder(mime) : true;
+                sb.append(dec ? " | decoder on this phone: yes" : " | NO DECODER ON THIS PHONE: the built-in player cannot play this track (use VLC/MX Player or convert)").append('\n');
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "Cannot read the media container (damaged or unsupported format): " + e.getMessage();
+        } finally {
+            try { ex.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    // ---------------------------------------------------------------- big old files and repeated downloads
+
+    private static void walkFiles(File d, List<File> out, long end, int depth) {
+        if (depth > 12 || System.currentTimeMillis() > end || out.size() > 100000) return;
+        File[] l = d.listFiles();
+        if (l == null) return;
+        for (File x : l) { if (x.isDirectory()) walkFiles(x, out, end, depth + 1); else out.add(x); }
+    }
+
+    private static String large(File root, int minMb) {
+        List<File> all = new ArrayList<File>();
+        walkFiles(root, all, System.currentTimeMillis() + TIME_LIMIT, 0);
+        long old = System.currentTimeMillis() - 90L * 86400000L;
+        List<File> big = new ArrayList<File>();
+        for (File f : all) if (f.length() >= minMb * 1048576L) big.add(f);
+        Collections.sort(big, new Comparator<File>() { public int compare(File a, File b) { return Long.compare(b.length(), a.length()); } });
+        StringBuilder sb = new StringBuilder("Files over " + minMb + " MB under " + root.getPath() + " (" + big.size() + "):\n");
+        long sum = 0;
+        for (int i = 0; i < big.size(); i++) {
+            File f = big.get(i);
+            sum += f.length();
+            if (i < 30) sb.append("  ").append(mb(f.length())).append("  ").append(f.lastModified() < old ? "[not changed 90+ days] " : "").append(f.getPath()).append('\n');
+        }
+        return sb.append("total ").append(mb(sum)).toString();
+    }
+
+    private static String downloadCopies(File d) {
+        File[] l = d.listFiles();
+        if (l == null) return "cannot list " + d.getPath();
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("^(.*?)(?: ?\\(\\d+\\)|-\\d)(\\.[^.]+)?$");
+        Map<String, File> byName = new HashMap<String, File>();
+        for (File f : l) if (f.isFile()) byName.put(f.getName(), f);
+        StringBuilder sb = new StringBuilder();
+        long waste = 0;
+        int n = 0;
+        for (File f : l) {
+            if (!f.isFile()) continue;
+            java.util.regex.Matcher m = p.matcher(f.getName());
+            if (!m.matches()) continue;
+            File orig = byName.get(m.group(1) + (m.group(2) == null ? "" : m.group(2)));
+            if (orig == null || orig.length() != f.length()) continue;
+            n++;
+            waste += f.length();
+            if (n <= 40) sb.append("  ").append(f.getName()).append("  = copy of ").append(orig.getName()).append(" (").append(mb(f.length())).append(")\n");
+        }
+        return "Repeated downloads in " + d.getPath() + ": " + n + ", " + mb(waste) + " could be freed\n" + sb;
+    }
+
+    // ---------------------------------------------------------------- documents
+
+    private static String doc(File f) {
+        byte[] h = new byte[8];
+        int n = 0;
+        try { InputStream in = new FileInputStream(f); n = in.read(h); in.close(); } catch (Exception e) { return "READ ERROR: " + e.getMessage(); }
+        if (n >= 8 && (h[0] & 0xFF) == 0xD0 && (h[1] & 0xFF) == 0xCF && (h[2] & 0xFF) == 0x11 && (h[3] & 0xFF) == 0xE0) {
+            String ext = f.getName().toLowerCase(Locale.US);
+            return ext.endsWith("x") ? "PASSWORD-PROTECTED Office file (an encrypted .docx/.xlsx is stored in this old container); it opens only with the password."
+                : "Old Office format (.doc/.xls/.ppt): needs an app that supports the old format.";
+        }
+        String t = type(h, n);
+        if (t.equals("pdf")) {
+            String base = pdfCheck(f);
+            if (android.os.Build.VERSION.SDK_INT >= 21) base += " | " + Compat.pdfPages(f);
+            return base;
+        }
+        if (t.equals("zip")) {
+            try {
+                ZipFile z = new ZipFile(f);
+                String kind = z.getEntry("word/document.xml") != null ? "Word document" : z.getEntry("xl/workbook.xml") != null ? "Excel workbook"
+                    : z.getEntry("ppt/presentation.xml") != null ? "PowerPoint" : z.getEntry("content.xml") != null ? "OpenDocument" : null;
+                z.close();
+                if (kind == null) return "ZIP container but not an Office document.";
+                return "OK " + kind + "; " + zipCheck(f);
+            } catch (Exception e) {
+                return "DAMAGED Office document: " + e.getMessage();
+            }
+        }
+        return checkFile(f);
+    }
+
+    // ---------------------------------------------------------------- deleted files that can still be recovered
+
+    private static String deleted(File root) {
+        String[] known = {"Android/.Trash", "DCIM/.thumbnails/.trash", "MIUI/Gallery/cloud/.trashBin", ".recycle", "Pictures/.trash",
+            "Android/data/com.sec.android.gallery3d/files/.Trash", "Android/data/com.coloros.gallery3d/files/.recycle", "Android/data/com.google.android.apps.photos/files/trash"};
+        StringBuilder sb = new StringBuilder();
+        long total = 0;
+        int cnt = 0;
+        for (String k : known) {
+            File d = new File(root, k);
+            File[] l = d.listFiles();
+            if (l == null || l.length == 0) continue;
+            long s = 0;
+            for (File x : l) s += x.length();
+            total += s;
+            cnt += l.length;
+            sb.append("  ").append(d.getPath()).append(": ").append(l.length).append(" items, ").append(mb(s)).append('\n');
+        }
+        List<File> all = new ArrayList<File>();
+        walkFiles(root, all, System.currentTimeMillis() + TIME_LIMIT, 0);
+        int tr = 0;
+        for (File f : all) {
+            if (!f.getName().startsWith(".trashed-")) continue;
+            tr++;
+            total += f.length();
+            if (tr <= 30) sb.append("  ").append(f.getPath()).append("  -> original name ").append(f.getName().replaceFirst("^\\.trashed-\\d+-", "")).append('\n');
+        }
+        cnt += tr;
+        if (cnt == 0) return "No recycle-bin files found under " + root.getPath() + " (Google Photos cloud trash is not on the phone).";
+        return "Deleted files still on the phone: " + cnt + ", " + mb(total) + "\n" + sb
+            + "Files named .trashed-<time>-<name> are in the Android recycle bin; renaming back to <name> (or restoring from the gallery's bin) recovers them.";
     }
 
     // ---------------------------------------------------------------- what fills the storage
