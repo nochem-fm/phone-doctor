@@ -105,6 +105,7 @@ final class Core {
         for (String s : p.getString("fbmodels", "").split("\n")) if (!s.trim().isEmpty()) fb.add(s.trim());
         agent.fallbacks = fb;
         agent.auto = p.getBoolean("auto", false);
+        agent.scoped = p.getBoolean("scope", true);
         agent.cacheDir = app.getCacheDir().getAbsolutePath();
         agent.stop = false;
         Shell.cancel = false;

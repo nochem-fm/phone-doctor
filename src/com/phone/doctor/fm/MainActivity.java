@@ -1959,6 +1959,8 @@ public class MainActivity extends Activity {
         c = card(list, "התנהגות הסוכן");
         c.addView(sw("מצב אוטונומי: תיקונים רגילים בלי לשאול", prefs.getBoolean("auto", false), "auto"));
         c.addView(note("פעולות מסוכנות (מחיקה, הסרת אפליקציות, setprop, iptables ועוד) תמיד דורשות אישור."));
+        c.addView(sw("רק נושאי טלפון: לא לענות על נושאים אחרים", prefs.getBoolean("scope", true), "scope"));
+        c.addView(note("כשמופעל, הסוכן עונה רק על בעיות בטלפון, באפליקציות, בקבצים ובהגדרות, ומסרב בנימוס לכל נושא אחר."));
 
         // --- screen access without root
         c = card(list, "גישה למסך בלי root");
@@ -2039,7 +2041,7 @@ public class MainActivity extends Activity {
 
         c = card(list, "אודות");
         c.addView(row("הצהרת סיכון ואחריות", "", new Runnable() { public void run() { showTerms(true); } }));
-        TextView about = tv("Phone Doctor 2.7", 12, DIM);
+        TextView about = tv("Phone Doctor 2.8", 12, DIM);
         about.setGravity(Gravity.CENTER);
         about.setPadding(0, dp(8), 0, 0);
         list.addView(about);
