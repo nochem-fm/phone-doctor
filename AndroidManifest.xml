@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.phone.doctor.fm"
-    android:versionCode="50"
-    android:versionName="5.0">
+    android:versionCode="51"
+    android:versionName="5.1">
 
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="33" />
 
@@ -64,6 +64,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Android 10: screen capture consent needs a media-projection foreground service -->
+        <service android:name=".ProjectionService" android:exported="false" android:foregroundServiceType="mediaProjection" />
+
+        <!-- result of an install/uninstall session -->
+        <receiver android:name=".InstallResult" android:exported="false" />
 
         <!-- hands an APK to the system installer (no root) -->
         <provider

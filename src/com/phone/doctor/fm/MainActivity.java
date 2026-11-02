@@ -281,6 +281,15 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onActivityResult(int req, int code, Intent data) {
+        super.onActivityResult(req, code, data);
+        if (req == Projection.REQ) {
+            if (code != RESULT_OK) toast("בלי האישור הסוכן לא יכול לצלם את המסך");
+            Projection.onResult(this, code, data);
+        }
+    }
+
+    @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
         if (code == REQ_MIC) {
             if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) onMic();

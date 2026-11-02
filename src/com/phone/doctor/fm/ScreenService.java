@@ -147,10 +147,115 @@ public class ScreenService extends AccessibilityService {
     private boolean gesture(int x1, int y1, int x2, int y2, long ms) throws Exception {
         if (Build.VERSION.SDK_INT >= 24) return GestureApi24.gesture(this, x1, y1, x2, y2, ms);
         Core.init(this);
-        if (!Core.prefs().getBoolean("root", false)) throw new Exception("הקשות והחלקות בלי root דורשות Android 7 ומעלה");
+        if (!Core.prefs().getBoolean("root", false)) return nodeGesture(x1, y1, x2, y2, ms);
         String c = (x1 == x2 && y1 == y2 && ms < 500) ? "input tap " + x1 + " " + y1
             : "input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + ms;
         return Shell.run(c, true, 10).exit == 0;
+    }
+
+    // ------------------------------------------------------------ Android 4.4-6 without root: act on the element instead of the point
+
+    /** The deepest element at (x,y) that accepts the wanted action. */
+    private AccessibilityNodeInfo nodeAt(AccessibilityNodeInfo n, int x, int y, int action) {
+        if (n == null) return null;
+        Rect r = new Rect();
+        n.getBoundsInScreen(r);
+        if (!r.contains(x, y)) return null;
+        for (int i = n.getChildCount() - 1; i >= 0; i--) {
+            AccessibilityNodeInfo c = nodeAt(n.getChild(i), x, y, action);
+            if (c != null) return c;
+        }
+        boolean ok = action == AccessibilityNodeInfo.ACTION_CLICK ? n.isClickable()
+            : action == AccessibilityNodeInfo.ACTION_LONG_CLICK ? n.isLongClickable() : n.isScrollable();
+        return ok ? n : null;
+    }
+
+    private boolean nodeGesture(int x1, int y1, int x2, int y2, long ms) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        if (x1 == x2 && y1 == y2) {
+            int a = ms >= 500 ? AccessibilityNodeInfo.ACTION_LONG_CLICK : AccessibilityNodeInfo.ACTION_CLICK;
+            AccessibilityNodeInfo n = nodeAt(root, x1, y1, a);
+            return n != null && n.performAction(a);
+        }
+        AccessibilityNodeInfo n = nodeAt(root, x1, y1, AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+        if (n == null) return false;
+        boolean forward = Math.abs(y2 - y1) >= Math.abs(x2 - x1) ? y2 < y1 : x2 < x1;   // finger up/left = content moves forward
+        return n.performAction(forward ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+    }
+
+    // ------------------------------------------------------------ app info screen actions without root
+
+    private boolean clickAny(String[] labels, long waitMs) throws InterruptedException {
+        long end = System.currentTimeMillis() + waitMs;
+        while (System.currentTimeMillis() < end) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                for (String l : labels) {
+                    List<AccessibilityNodeInfo> f = root.findAccessibilityNodeInfosByText(l);
+                    if (f == null) continue;
+                    for (AccessibilityNodeInfo n : f) {
+                        CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
+                        if (t == null || !t.toString().trim().equalsIgnoreCase(l)) continue;   // exact label, so "Clear cache" never hits "Clear storage"
+                        AccessibilityNodeInfo c = n;
+                        while (c != null && !c.isClickable()) c = c.getParent();
+                        if (c != null && c.isEnabled() && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
+                        if (c != null && !c.isEnabled()) return false;
+                    }
+                }
+            }
+            Thread.sleep(300);
+        }
+        return false;
+    }
+
+    static final String[] FORCE_STOP = {"Force stop", "FORCE STOP", "עצירה בכפייה", "עצירה בכוח", "עצור בכוח", "הפסקה בכפייה", "כפה עצירה", "עצור"};
+    static final String[] CONFIRM = {"OK", "אישור", "Force stop", "עצירה בכפייה", "עצור", "Disable app", "השבתת האפליקציה", "השבת אפליקציה", "השבתה", "Disable"};
+    static final String[] STORAGE = {"Storage & cache", "Storage and cache", "Storage", "אחסון ומטמון", "אחסון וזיכרון מטמון", "אחסון"};
+    static final String[] CLEAR_CACHE = {"Clear cache", "CLEAR CACHE", "ניקוי המטמון", "ניקוי מטמון", "נקה מטמון", "מחיקת המטמון", "נקה את המטמון"};
+    static final String[] DISABLE = {"Disable", "DISABLE", "השבתה", "השבת", "כבה"};
+    static final String[] ENABLE = {"Enable", "ENABLE", "הפעלה", "הפעל"};
+    static final String[] PERMS = {"Permissions", "הרשאות", "הרשאות אפליקציה"};
+
+    /** Opens the app's info screen and presses the buttons for the action. Returns a log for the agent. */
+    String appAction(String pkg, String action) throws Exception {
+        Intent i = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + pkg))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(i);
+        Thread.sleep(1800);
+        StringBuilder log = new StringBuilder("opened app info of " + pkg + "\n");
+        boolean ok;
+        switch (action) {
+            case "force_stop":
+                ok = clickAny(FORCE_STOP, 4000);
+                log.append(ok ? "pressed Force stop\n" : "Force stop button not found or disabled (the app may already be stopped)\n");
+                if (ok) { ok = clickAny(CONFIRM, 3000); log.append(ok ? "confirmed\n" : "no confirmation dialog\n"); ok = true; }
+                break;
+            case "clear_cache":
+                ok = clickAny(STORAGE, 4000);
+                log.append(ok ? "opened Storage\n" : "Storage entry not found\n");
+                if (ok) { Thread.sleep(1200); ok = clickAny(CLEAR_CACHE, 4000); log.append(ok ? "pressed Clear cache\n" : "Clear cache not found or disabled (cache may be empty)\n"); }
+                break;
+            case "disable":
+                ok = clickAny(DISABLE, 4000);
+                log.append(ok ? "pressed Disable\n" : "Disable not found or not allowed for this app\n");
+                if (ok) { ok = clickAny(CONFIRM, 3000); log.append(ok ? "confirmed\n" : "no confirmation\n"); }
+                break;
+            case "enable":
+                ok = clickAny(ENABLE, 4000);
+                log.append(ok ? "pressed Enable\n" : "Enable not found (already enabled?)\n");
+                break;
+            case "open_permissions":
+                ok = clickAny(PERMS, 4000);
+                log.append(ok ? "opened Permissions\n" : "Permissions entry not found\n");
+                return (ok ? "OK " : "FAILED ") + log + "screen now:\n" + dump();
+            default:
+                return "FAILED unknown action " + action;
+        }
+        Thread.sleep(800);
+        String screen = dump();
+        performGlobalAction(GLOBAL_ACTION_BACK);
+        return (ok ? "OK " : "FAILED ") + log + (ok ? "" : "screen was:\n" + screen);
     }
 
     private String clickText(String text) {

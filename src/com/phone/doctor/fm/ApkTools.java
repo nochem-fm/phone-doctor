@@ -279,6 +279,91 @@ final class ApkTools {
     }
 
     /**
+     * Installs through a PackageInstaller session from inside the app. As device owner this is silent;
+     * otherwise Android shows one confirmation. Works for bundles too. Returns null if sessions are unavailable.
+     */
+    private static String sessionInstall(Context c, File f, boolean bundle) {
+        boolean owner = false;
+        try { owner = AdminOps.isOwner(c); } catch (Throwable ignored) { }
+        android.content.pm.PackageInstaller pi = c.getPackageManager().getPackageInstaller();
+        int sid;
+        android.content.pm.PackageInstaller.Session s = null;
+        try {
+            android.content.pm.PackageInstaller.SessionParams p = new android.content.pm.PackageInstaller.SessionParams(android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            sid = pi.createSession(p);
+            s = pi.openSession(sid);
+            if (bundle) {
+                ZipFile z = new ZipFile(f);
+                int n = 0;
+                for (Enumeration<? extends ZipEntry> e = z.entries(); e.hasMoreElements(); ) {
+                    ZipEntry en = e.nextElement();
+                    if (en.isDirectory() || !en.getName().endsWith(".apk") || en.getName().contains("..")) continue;
+                    write(s, "p" + (n++) + ".apk", z.getInputStream(en), en.getSize());
+                }
+                z.close();
+                if (n == 0) { s.abandon(); return "FAILED: no APK files inside the bundle"; }
+            } else {
+                write(s, "base.apk", new FileInputStream(f), f.length());
+            }
+            InstallResult.prepare();
+            Intent cb = new Intent(c, InstallResult.class);
+            android.app.PendingIntent pend = android.app.PendingIntent.getBroadcast(c, sid, cb, Compat.mutable() | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+            s.commit(pend.getIntentSender());
+            s.close();
+            String res = InstallResult.await(owner ? 120 : 180);
+            if (res.startsWith("Success")) return "OK installed" + (owner ? " silently (device owner)." : " (the user confirmed in the system dialog).");
+            String ex = explain(res);
+            return "FAILED: " + (ex != null ? ex + " | " : "") + res
+                + (owner ? "" : " (if the user saw 'install unknown apps', Phone Doctor must be allowed there first)");
+        } catch (SecurityException e) {
+            if (s != null) { try { s.abandon(); } catch (Exception ignored) { } }
+            return "FAILED: installing is not allowed for Phone Doctor: " + e.getMessage();
+        } catch (Exception e) {
+            if (s != null) { try { s.abandon(); } catch (Exception ignored) { } }
+            return null;
+        }
+    }
+
+    private static void write(android.content.pm.PackageInstaller.Session s, String name, InputStream in, long size) throws Exception {
+        java.io.OutputStream o = s.openWrite(name, 0, size > 0 ? size : -1);
+        byte[] b = new byte[65536];
+        int n;
+        while ((n = in.read(b)) > 0) o.write(b, 0, n);
+        s.fsync(o);
+        o.close();
+        in.close();
+    }
+
+    /** Uninstall: root -> pm uninstall; device owner -> silent PackageInstaller; otherwise the system asks the user. */
+    static String uninstall(Context c, String pkg, boolean rootOk, boolean keepData) {
+        if (!pkg.matches("[A-Za-z0-9_.]+")) return "FAILED: invalid package";
+        if (rootOk) {
+            String out = Shell.run("pm uninstall " + (keepData ? "-k " : "") + pkg + " 2>&1", true, 120).out.trim();
+            if (out.contains("Success")) return "OK uninstalled" + (keepData ? " (data kept)" : "");
+            out = out + " | " + Shell.run("pm uninstall --user 0 " + pkg + " 2>&1", true, 120).out.trim();   // system apps: remove for this user only
+            return out.contains("Success") ? "OK removed for this user (a system app stays in the system image and can be restored)" : "FAILED: " + out;
+        }
+        if (Build.VERSION.SDK_INT < 21) {
+            try {
+                c.startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return "OPENED the system uninstall dialog: the user must confirm.";
+            } catch (Exception e) { return "FAILED: " + e.getMessage(); }
+        }
+        try {
+            boolean owner = false;
+            try { owner = AdminOps.isOwner(c); } catch (Throwable ignored) { }
+            InstallResult.prepare();
+            Intent cb = new Intent(c, InstallResult.class);
+            android.app.PendingIntent pend = android.app.PendingIntent.getBroadcast(c, 7001, cb, Compat.mutable() | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+            c.getPackageManager().getPackageInstaller().uninstall(pkg, pend.getIntentSender());
+            String r = InstallResult.await(owner ? 60 : 120);
+            return r.startsWith("Success") ? "OK uninstalled" + (owner ? " silently (device owner)" : "") : "FAILED: " + r;
+        } catch (Exception e) {
+            return "FAILED: " + e.getMessage();
+        }
+    }
+
+    /**
      * Runs a streaming install. Returns the final report, or null when streaming itself is not supported on this
      * phone (then the caller falls back to copying into /data/local/tmp).
      */
@@ -299,6 +384,10 @@ final class ApkTools {
         File f = new File(path);
         String low = path.toLowerCase(Locale.US);
         boolean bundle = low.endsWith(".apks") || low.endsWith(".xapk") || low.endsWith(".apkm");
+        if (!rootOk && Build.VERSION.SDK_INT >= 21) {
+            String r = sessionInstall(c, f, bundle);
+            if (r != null) return r;
+        }
         if (!rootOk) {
             if (bundle) return "FAILED: without root the system installer cannot install a bundle (.apks/.xapk). Suggest an installer app such as SAI, or root.";
             try {

@@ -68,6 +68,7 @@ final class Core {
     static void stopRun() {
         queue = null;
         Shell.cancel = true;
+        Shell.Job.stopAll();
         if (agent != null) agent.abort();
         Pending p = pending;
         if (p != null) { p.ok = false; p.latch.countDown(); }

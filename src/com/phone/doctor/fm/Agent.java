@@ -250,6 +250,10 @@ final class Agent {
                 case "app_restore": appRestore(args, out); break;
                 case "app_backups": appBackups(args, out); break;
                 case "apk_info": apkInfo(args, out); break;
+                case "read_output": out.put("result", Shell.Outputs.read(args.optString("output_id"), args.optString("grep", ""), Math.max(1, args.optInt("from_line", 1)), Math.max(1, Math.min(400, args.optInt("lines", 120))))); break;
+                case "run_background": runBackground(args, out); break;
+                case "app_settings_action": appSettingsAction(args, out); break;
+                case "app_uninstall": appUninstall(args, out); break;
                 case "find_files": findFiles(args, out); break;
                 case "apk_install": apkInstall(args, out); break;
                 default: out.put("error", "unknown tool " + name);
@@ -324,7 +328,7 @@ final class Agent {
         }
         ui.status(purpose);
         actions++;
-        Shell.Result r = Shell.run(cmd, root, 40);
+        Shell.Result r = Shell.run(cmd, root, Math.max(5, Math.min(300, args.optInt("timeout_sec", 40))));
         out.put("exit_code", r.exit);
         out.put("output", r.out);
         ui.stepDone(st, r.exit == 0, r.out, null);
@@ -489,12 +493,20 @@ final class Agent {
         int st = ui.step("shot", args.optString("purpose", "מצלם מסך"), pkg.isEmpty() ? "המסך הנוכחי" : "אחרי פתיחת " + pkg);
         ui.status("מצלם מסך");
         actions++;
+        boolean useProj = !rootOk && android.os.Build.VERSION.SDK_INT >= 21 && android.os.Build.VERSION.SDK_INT < 30;
+        if (useProj && !Projection.ready()) {   // Android 5-10 without root: ask once for screen-capture consent, while we are still in front
+            ui.status("מבקש אישור לצילום המסך (פעם אחת)…");
+            Projection.request();
+        }
         if (!pkg.isEmpty()) { launch(pkg); Thread.sleep(2200); } else leaveOurApp();
         Bitmap bm = null;
         String how = "", err = "";
         ScreenService s = ScreenService.inst;
-        if (s != null) {
+        if (s != null && android.os.Build.VERSION.SDK_INT >= 30) {
             try { bm = s.shot(); how = "שירות נגישות"; } catch (Exception e) { err = String.valueOf(e.getMessage()); }
+        }
+        if (bm == null && android.os.Build.VERSION.SDK_INT >= 21 && Projection.ready()) {
+            try { bm = Projection.shot(ctx); how = "צילום מסך של המערכת"; } catch (Exception e) { err += " | projection: " + e.getMessage(); }
         }
         if (bm == null && rootOk) {
             String f = cacheDir + "/shot.png";
@@ -825,7 +837,8 @@ final class Agent {
         ScreenService sv = ScreenService.inst;
         String img = null;
         try {
-            Bitmap bm = sv != null ? sv.shot() : null;
+            Bitmap bm = sv != null && android.os.Build.VERSION.SDK_INT >= 30 ? sv.shot() : null;
+            if (bm == null && android.os.Build.VERSION.SDK_INT >= 21 && Projection.ready()) bm = Projection.shot(ctx);
             if (bm == null && rootOk) {
                 String f = cacheDir + "/shot.png";
                 Shell.run("screencap -p '" + f + "' && chmod 666 '" + f + "'", true, 20);
@@ -902,6 +915,106 @@ final class Agent {
         String r = AppBackup.restore(ctx, id, rootOk);
         out.put("result", r);
         ui.stepDone(st, r.startsWith("OK"), r, null);
+    }
+
+    private void runBackground(JSONObject a, JSONObject out) throws Exception {
+        String cmd = a.getString("command");
+        boolean root = a.optBoolean("root", false) && rootOk;
+        int st = ui.step("cmd", a.optString("purpose", "בדיקה ארוכה ברקע"), cmd + (root ? "\n(root, ברקע)" : "\n(ברקע)"));
+        if (!Safety.readOnly(cmd)) {
+            out.put("error", "run_background accepts only read-only commands (searches, scans, logs). Use run_command for changes.");
+            ui.stepDone(st, false, "רק פקודות בדיקה מותרות ברקע", null);
+            return;
+        }
+        actions++;
+        String id = Shell.Job.start(cmd, root);
+        out.put("result", "Started. output_id=" + id + ". Do other checks meanwhile; read it later with read_output (it says RUNNING until it ends). wait_and_recheck can be used to pause.");
+        ui.stepDone(st, true, "רץ ברקע: " + id, null);
+    }
+
+    private static final String[] CORE_APPS = {"com.android.settings", "com.android.phone", "com.android.providers.contacts", "com.android.contacts",
+        "com.google.android.gms", "com.android.vending", "com.android.systemui", "com.google.android.inputmethod.latin", "com.android.mms", "com.google.android.apps.messaging"};
+
+    private void appSettingsAction(JSONObject a, JSONObject out) throws Exception {
+        String pkg = a.getString("package"), act = a.getString("action");
+        String purpose = a.optString("purpose", act + " " + pkg);
+        int st = ui.step("app", purpose, "app_settings_action " + act + " " + pkg);
+        if (!pkg.matches("[A-Za-z0-9_.]+")) throw new Exception("invalid package");
+        boolean core = false;
+        for (String c : CORE_APPS) if (c.equals(pkg)) core = true;
+        if (act.equals("disable") && core) {
+            out.put("error", "Refused: disabling a core system app can break the phone.");
+            ui.stepDone(st, false, "נחסם: השבתת אפליקציית מערכת חיונית", null);
+            return;
+        }
+        boolean change = !act.equals("open_permissions");
+        if (change && !allow(purpose, "[פעולה על אפליקציה] " + act + " " + pkg + (rootOk ? "" : "\n(דרך מסך 'מידע על האפליקציה', בלחיצות אוטומטיות)"), rootOk,
+                act.equals("disable") ? "dangerous" : "modifies", true)) {
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
+            ui.stepDone(st, false, "נדחה על ידך", null);
+            return;
+        }
+        ui.status(purpose);
+        actions++;
+        String r;
+        if (rootOk) {
+            String sh;
+            switch (act) {
+                case "force_stop": sh = "am force-stop " + pkg; break;
+                case "clear_cache": sh = "rm -rf /data/data/" + pkg + "/cache/* /data/data/" + pkg + "/code_cache/* /sdcard/Android/data/" + pkg + "/cache/* 2>/dev/null; echo done"; break;
+                case "disable": sh = "pm disable-user --user 0 " + pkg; break;
+                case "enable": sh = "pm enable " + pkg; break;
+                default: sh = null;
+            }
+            if (sh != null) {
+                Shell.Result x = Shell.run(sh + " 2>&1", true, 30);
+                r = (x.exit == 0 ? "OK " : "FAILED ") + x.out;
+                if (x.exit == 0 && act.equals("disable")) {
+                    Journal.Plan pl = new Journal.Plan();
+                    pl.level = 1;
+                    pl.undo.add("pm enable " + pkg);
+                    long jid = Journal.add(purpose, sh, true, pl, 0);
+                    if (jid != 0) ui.stepUndo(st, jid, 1);
+                }
+                out.put("result", r);
+                ui.stepDone(st, r.startsWith("OK"), r, null);
+                return;
+            }
+        }
+        ScreenService sv = ScreenService.inst;
+        if (sv == null) {
+            out.put("error", "Without root this needs the accessibility service (it presses the buttons in App info). Ask the user to enable it, or give manual steps.");
+            ui.stepDone(st, false, "צריך את שירות הנגישות", null);
+            return;
+        }
+        leaveOurApp();
+        r = sv.appAction(pkg, act);
+        out.put("result", r);
+        ui.stepDone(st, r.startsWith("OK"), r, null);
+    }
+
+    private void appUninstall(JSONObject a, JSONObject out) throws Exception {
+        String pkg = a.getString("package");
+        boolean keep = a.optBoolean("keep_data", false);
+        String purpose = a.optString("purpose", "הסרת " + pkg);
+        int st = ui.step("app", purpose, "app_uninstall " + pkg);
+        for (String c : CORE_APPS) if (c.equals(pkg)) {
+            out.put("error", "Refused: uninstalling a core system app can break the phone.");
+            ui.stepDone(st, false, "נחסם: אפליקציית מערכת חיונית", null);
+            return;
+        }
+        if (!allow(purpose, "[הסרת אפליקציה] " + pkg + (keep ? " (שמירת הנתונים)" : "") + (rootOk ? "\nלפני ההסרה יישמר גיבוי (קובץ ההתקנה והנתונים)." : ""), rootOk, "dangerous", true, true)) {
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
+            ui.stepDone(st, false, "נדחה על ידך", null);
+            return;
+        }
+        ui.status("מסיר את " + pkg + "…");
+        actions++;
+        String pre = rootOk ? AppBackup.backup(ctx, pkg, true, "before uninstall") : "";
+        String r = ApkTools.uninstall(ctx, pkg, rootOk, keep);
+        if (pre.startsWith("OK")) r += ". Backup taken first: " + pre.substring(3).split(" ")[0] + " (app_restore reinstalls it with its data).";
+        out.put("result", r);
+        ui.stepDone(st, r.startsWith("OK") || r.startsWith("OPENED"), r, null);
     }
 
     private void findFiles(JSONObject a, JSONObject out) throws Exception {
@@ -1074,6 +1187,8 @@ final class Agent {
             + "FIND IT YOURSELF: when the user mentions a file, app or setting, locate it with your tools (find_files, inspect_app, usage stats) before asking; ask only what tools truly cannot tell, and then with ask_user buttons.\n"
             + "FACTS VS GUESSES: say exactly what each check proved. A header/metadata check does not prove a file is whole; low RAM or storage is a POSSIBLE cause, not a proven one, unless you measured it during the problem. Label guesses as possibilities.\n"
             + "TOOLS THAT DO NOT EXIST: there is no ffmpeg, python, curl or busybox unless you checked with 'command -v'. Use the built-in tools (inspect_files remux/media_deep) instead.\n"
+            + "WITHOUT ROOT, app_settings_action presses the buttons in App info for you (force stop, clear cache, disable); prefer it over telling the user to do it. "
+            + "Long outputs are cut with an output_id: use read_output to search them instead of re-running; long scans go to run_background.\n"
             + "INSTALLING / TEST-INSTALLING an APK (also just to see the exact error): ALWAYS use apk_install. It streams the file into the installer in one step (no copying to /data/local/tmp) and explains the error. Never copy APKs or run pm install yourself with run_command.\n"
             + "APK FILES: for 'the app does not install' or a downloaded APK, run apk_info first (compatibility, signature, fake check), then apk_install.\n"
             + "APP CRASHES: use reproduce_app first: one call opens the app and returns whether it stayed alive, the crash log, memory and a screenshot.\n"
@@ -1107,6 +1222,7 @@ final class Agent {
                 {"root", "boolean", "true to run as root via su."},
                 {"purpose", "string", "One short Hebrew sentence: what and why. Shown to the user."},
                 {"risk", "string", "read_only, modifies or dangerous."},
+                {"timeout_sec", "number", "Optional, 5-300 (default 40). For longer jobs use run_background."},
                 {"undo_command", "string", "Optional: exact shell command(s) that reverse this change (e.g. the opposite pm/appops/settings command). Needed for commands whose reversal the app cannot work out itself."}}, "command", "purpose", "risk"));
         d.put(fn("inspect_app", "Complete diagnostic report about one app in a single call. Accepts a name or package; if ambiguous returns the list of installed apps.",
             new String[][]{{"query", "string", "App name (any language) or exact package name."},
@@ -1164,6 +1280,15 @@ final class Agent {
             new String[][]{{"package", "string", "Package name."}, {"note", "string", "Optional short note."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
         d.put(fn("app_restore", "Restore an app from a backup (root): reinstalls that version and puts its data back. The current state is backed up first.",
             new String[][]{{"backup_id", "string", "From app_backup or app_backups."}, {"purpose", "string", "Short Hebrew sentence."}}, "backup_id", "purpose"));
+        d.put(fn("read_output", "Read a long output that was cut (output_id from a '[truncated ... output_id=...]' note) or a background job's output: grep for a regex, or page through lines.",
+            new String[][]{{"output_id", "string", "e.g. out3_12345 or job1_12345"}, {"grep", "string", "Optional regex (case-insensitive)."},
+                {"from_line", "number", "Page start (when no grep)."}, {"lines", "number", "Max lines, default 120."}}, "output_id"));
+        d.put(fn("run_background", "Start a long READ-ONLY command (big find/du/logcat/scans) in the background without a time limit; returns an output_id to read later with read_output.",
+            new String[][]{{"command", "string", "Read-only shell command."}, {"root", "boolean", "Run with root."}, {"purpose", "string", "Short Hebrew sentence."}}, "command", "purpose"));
+        d.put(fn("app_settings_action", "Act on an app: force_stop, clear_cache (cache only, never data), disable, enable, open_permissions. With root it runs the command; WITHOUT root it opens the app's 'App info' screen and presses the buttons through the accessibility service (works on any Android version with accessibility). Core system apps cannot be disabled.",
+            new String[][]{{"package", "string", "Package name."}, {"action", "string", "force_stop, clear_cache, disable, enable or open_permissions"}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "action", "purpose"));
+        d.put(fn("app_uninstall", "Uninstall an app. Root: backup first, then pm uninstall (system apps: removed for this user only). Device owner: silent. Otherwise the system asks the user. Core system apps are refused.",
+            new String[][]{{"package", "string", "Package name."}, {"keep_data", "boolean", "Keep the app's data (root)."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
         d.put(fn("find_files", "Find files on the phone's storage by PART of the name (any language, case-insensitive), newest first, including Android/media (WhatsApp/Telegram media). Use it whenever the user mentions a file, instead of asking for its path.",
             new String[][]{{"name", "string", "Part of the file name, e.g. a Hebrew word from it. Empty = all files of the type."},
                 {"type", "string", "any, video, audio, image, doc, archive"}, {"purpose", "string", "Short Hebrew sentence."}}, "name", "purpose"));
