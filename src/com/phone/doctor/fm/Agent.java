@@ -98,6 +98,29 @@ final class Agent {
         this.rootOk = rootOk;
     }
 
+    private static boolean endsWithQuestion(String t) {
+        String tail = t.length() > 250 ? t.substring(t.length() - 250) : t;
+        return tail.contains("?");
+    }
+
+    /** Only requests about the device count; small talk, thanks and explanations of terms do not. */
+    private static boolean isTask(String u) {
+        String l = u.trim().toLowerCase(java.util.Locale.ROOT);
+        if (l.length() < 6) return false;
+        String[] w = {"בדוק", "בדיקת", "בדיקה", "למה", "לא מצליח", "לא עובד", "לא נפתח", "לא מתקין", "להתקין", "התקנ", "תקן", "תתקן", "קורס", "נתקע", "נתקע",
+            "איטי", "מתרוקנ", "תמצא", "חפש", "קובץ", "אפליקצי", "התראות", "סוללה", "אחסון", "זיכרון", "רשת", "אינטרנט", "wifi", "וייפיי", "בלוטוס", "מסך", "apk", "שגיאה", "תקלה", "בעיה"};
+        for (String x : w) if (l.contains(x)) return true;
+        return false;
+    }
+
+    private boolean lazy(String answer, int toolsUsed, String userText) {
+        if (!isTask(userText) || answer.isEmpty()) return false;
+        if (answer.contains("רק בבעיות") || answer.contains("רק בנושאי")) return false;   // a scope refusal is a valid reply
+        if (userText.startsWith("[")) return false;            // internal messages
+        if (toolsUsed == 0) return true;                         // a task answered from nothing
+        return endsWithQuestion(answer) && answer.length() < 700; // a short answer that just bounces a question back
+    }
+
     /** A question answered locally (no request) still becomes part of the conversation context. */
     void note(String user, String answer) {
         try {
@@ -129,6 +152,8 @@ final class Agent {
             for (JSONObject a : attach) up.put(a);
             attach.clear();
             contents.put(um);
+            int toolsUsed = 0;
+            boolean nudged = false;
             for (int i = 0; i < 60; i++) {
                 if (stop) { repair(); ui.reply("עצרתי לפי בקשתך."); return; }
                 maybeSummarize();
@@ -149,9 +174,22 @@ final class Agent {
                 }
                 if (calls.isEmpty()) {
                     String t = text.toString().trim();
+                    // A real request answered without investigating, or bounced back to the user as a question:
+                    // send the model back to work once (costs one request, saves a useless round with the user).
+                    if (!nudged && lazy(t, toolsUsed, userText)) {
+                        nudged = true;
+                        ui.status("הסוכן עונה בלי לבדוק, מחזיר אותו לעבודה…");
+                        contents.put(msg("user", "[AUTOMATIC CHECK BY THE APP, not the user] Your reply does not answer the request: "
+                            + (toolsUsed == 0 ? "you did not investigate with your tools. " : "")
+                            + (endsWithQuestion(t) ? "You asked the user for something your tools can find (find_files, apk_info, inspect_app, inspect_system, reproduce_app, usage stats). " : "")
+                            + "Do the investigation now with the tools, then give the full detailed answer to the user's actual question in Hebrew. "
+                            + "Ask the user only if a tool truly cannot tell, and then with ask_user buttons."));
+                        continue;
+                    }
                     ui.reply(t.isEmpty() ? "(אין תשובה)" : t);
                     return;
                 }
+                toolsUsed += calls.size();
                 String think = text.toString().trim();
                 if (!think.isEmpty()) {
                     String first = think.split("\n")[0];
@@ -978,7 +1016,17 @@ final class Agent {
             + capabilities()
             + Memory.prompt()
             + "GOAL: the user describes a problem (an app that does not work, a permission that does not take effect, battery, lag, network...). Find the root cause and fix it yourself, end to end, without asking the user for things you can find out or do alone.\n"
-            + "EFFICIENCY IS CRITICAL: every model request costs scarce free-tier quota. Aim for 3 requests per problem: "
+            + "ANSWER QUALITY (most important): answer exactly what the user asked, fully and in detail. Investigate with your tools BEFORE answering; never answer a request from the quick scan alone, "
+            + "never reply with only a question, and never repeat a question the user already refused to answer: find it out yourself.\n"
+            + "PLAYBOOKS (follow them):\n"
+            + "- 'health check' / 'בדיקת בריאות': call inspect_system with focus general, battery, performance, storage AND network (in parallel, one response), plus crash history; "
+            + "then a full report with a section per area (battery: level, health, temperature, cycles if known; storage; RAM; CPU/heat; network; crashing apps; security patch age; disabled important apps), "
+            + "each marked תקין / דורש תשומת לב / בעיה with the real numbers, then concrete recommendations. Do not change anything in a health check.\n"
+            + "- 'APK will not install' / 'לא מצליח להתקין': find_files with a word from the app name (type archive; also try English/Hebrew variants) -> apk_info on the best match "
+            + "(several matches: newest, or ask_user buttons) -> explain the exact reason from the VERDICT (signature conflict with an installed copy, Android too old, CPU, split part, damaged/incomplete download, blocked unknown sources) "
+            + "and what to do; offer apk_install. Also check the installer log: logcat -d | grep -i -E 'PackageInstaller|INSTALL_FAILED|PackageManager' | tail -40 (root=true if available).\n"
+            + "- an app that crashes: reproduce_app. A file that will not open/play: find_files then inspect_files (media_deep for video).\n"
+            + "EFFICIENCY: every model request costs scarce free-tier quota. Aim for few requests per problem: "
             + "(1) investigate with inspect_app / inspect_system (they gather everything in one go), issuing SEVERAL tool calls in the same response when they are independent; "
             + "(2) apply ALL fixes together in ONE run_command containing many commands (separate with newlines or ;), only one approval is needed; "
             + "(3) final answer. Never run one small command per request. Put many checks in one script and print markers with echo.\n"
@@ -1019,7 +1067,9 @@ final class Agent {
             + "Say plainly in Hebrew that you could not check that part (e.g. 'לא הצלחתי לבדוק את X') and why if known, report only what you actually measured, and continue with what you can check. "
             + "A failed check is a reason to try another way (root=true, a different command, the screen), not to stop investigating. "
             + "Base fixes on evidence you actually saw (a crash log, an error, a wrong setting); a general health check with no real problem found ends with a report, not with changes.\n"
-            + "FINAL ANSWER (Hebrew, short, simple, non-technical): the cause, what you did, the result, what remains for the user.";
+            + "FINAL ANSWER (Hebrew, detailed and organized with short headings or bullets, clear words, explain technical terms in one phrase): "
+            + "1) a direct answer to the question in the first sentence; 2) what you checked and what you found, with the real numbers; 3) the cause (say if proven or only possible); "
+            + "4) what you did and the result (verified or not); 5) what remains for the user, step by step. End with a question only if you are truly blocked.";
     }
 
     private JSONObject body() throws JSONException {

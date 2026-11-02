@@ -101,7 +101,7 @@ final class LocalAnswers {
     }
 
     static String quickScan(Context c, boolean root) {
-        StringBuilder sb = new StringBuilder("[AUTOMATIC QUICK SCAN, collected locally before this message; use it instead of re-checking these]\n");
+        StringBuilder sb = new StringBuilder("[AUTOMATIC QUICK SCAN, collected locally before this message. Starting facts only: it does NOT replace the checks the request needs]\n");
         try {
             StatFs s = new StatFs(Environment.getDataDirectory().getPath());
             long free = (long) s.getAvailableBlocks() * s.getBlockSize(), total = (long) s.getBlockCount() * s.getBlockSize();
