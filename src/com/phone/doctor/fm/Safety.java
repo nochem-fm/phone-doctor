@@ -1,6 +1,8 @@
 package com.phone.doctor.fm;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -39,11 +41,45 @@ final class Safety {
         "unforce", "tempwhitelist", "add", "del", "delete", "flush", "change", "replace", "up", "down"));
 
     /** True only if every segment of the command is a known read-only operation. */
+    /** The command with the inside of '...' and "..." blanked, so a | or > inside a grep pattern is not taken as a pipe/redirect. */
+    static String unquoted(String cmd) {
+        StringBuilder sb = new StringBuilder(cmd.length());
+        char q = 0;
+        for (int i = 0; i < cmd.length(); i++) {
+            char c = cmd.charAt(i);
+            if (q == 0) {
+                if (c == '\'' || c == '"') { q = c; sb.append(c); } else sb.append(c);
+            } else {
+                if (c == q) { q = 0; sb.append(c); } else sb.append(c == '\n' ? '\n' : '_');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Splits on newline ; && || | outside quotes. */
+    static List<String> segments(String cmd) {
+        List<String> out = new ArrayList<String>();
+        String u = unquoted(cmd);
+        int start = 0;
+        for (int i = 0; i < u.length(); i++) {
+            char c = u.charAt(i);
+            int len = 0;
+            if (c == '\n' || c == ';') len = 1;
+            else if (c == '|') len = (i + 1 < u.length() && u.charAt(i + 1) == '|') ? 2 : 1;
+            else if (c == '&' && i + 1 < u.length() && u.charAt(i + 1) == '&') len = 2;
+            if (len > 0) { out.add(cmd.substring(start, i)); start = i + len; i += len - 1; }
+        }
+        out.add(cmd.substring(start));
+        return out;
+    }
+
+    /** True only if every segment of the command is a known read-only operation. */
     static boolean readOnly(String cmd) {
         String s = cmd.replace("2>&1", "").replace("2>/dev/null", "").replace(">/dev/null", "");
-        if (s.contains(">") || s.contains("`") || s.contains("$(") || s.contains("<(")) return false;
-        for (String seg : s.split("\\|\\||&&|;|\\||\\n")) {
-            if (seg.contains("&")) return false;
+        String u = unquoted(s);
+        if (u.contains(">") || u.contains("`") || u.contains("$(") || u.contains("<(")) return false;
+        for (String seg : segments(s)) {
+            if (unquoted(seg).contains("&")) return false;
             if (!segOk(seg.trim())) return false;
         }
         return true;

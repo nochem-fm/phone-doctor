@@ -302,7 +302,7 @@ final class Agent {
             if (!note.isEmpty()) shown = cmd + "\n\n" + note;
         }
         if (!allow(purpose, shown, root, force ? "dangerous" : risk, !ro, force)) {
-            out.put("result", "USER_DENIED: the user refused. Do not retry; explain what they can do manually.");
+            out.put("result", "USER_DENIED: the user refused this action. Do not retry it. CONTINUE the task: finish the remaining checks of your plan, then give the complete final answer with ALL findings (self-contained), mentioning the refused action as an option.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -440,7 +440,14 @@ final class Agent {
         String mem = "echo '== MEMORY'; head -6 /proc/meminfo\n";
         String sto = "echo '== STORAGE'; df -h /data /sdcard 2>&1 | head -6\n";
         String thermal = "echo '== THERMAL'; dumpsys thermalservice 2>&1 | head -15\n";
-        String crashes = "echo '== RECENT CRASHES'; logcat -d -b crash -t 60 2>&1 | tail -30\n";
+        String crashes = "echo '== RECENT CRASHES (log)'; logcat -d -b crash -t 60 2>&1 | tail -30\n";
+        // crash/ANR history the system keeps for days (needs root or DUMP; empty otherwise)
+        String history = "echo '== CRASH HISTORY: entries per type (system dropbox, several days)'; "
+            + "dumpsys dropbox 2>/dev/null | grep -oE '(data|system)_app_(crash|anr|native_crash)|system_server_(crash|anr|watchdog)|SYSTEM_TOMBSTONE' | sort | uniq -c\n"
+            + "echo '== first/last entry dates'; dumpsys dropbox 2>/dev/null | grep -E '^[0-9]{4}-' | sed -n '1p;$p'\n"
+            + "for t in data_app_crash system_app_crash data_app_anr system_app_anr data_app_native_crash; do echo \"== top processes: $t\"; "
+            + "dumpsys dropbox --print $t 2>/dev/null | grep -E '^Process: ' | sort | uniq -c | sort -rn | head -6; done\n"
+            + "echo '== last crash details'; dumpsys dropbox --print data_app_crash 2>/dev/null | grep -E '^(Process|Package):|Exception|Error' | tail -8\n";
         String net = "echo '== NETWORK'; ip -brief addr 2>&1 | head; ip route 2>&1 | head -5; getprop net.dns1; ping -c 2 -W 2 8.8.8.8 2>&1 | tail -3; ping -c 2 -W 2 google.com 2>&1 | tail -3\n"
             + "dumpsys connectivity 2>&1 | grep -E 'Active default|NetworkAgentInfo' | head -6\ndumpsys wifi 2>&1 | grep -E 'Wi-Fi is|rssi|RSSI|SSID' | head -6\n";
         String sh;
@@ -459,12 +466,16 @@ final class Agent {
             case "network":
                 sh = dev + net;
                 break;
+            case "crashes":
+                sh = dev + history + crashes;
+                break;
             case "storage":
                 sh = dev + sto + "echo '== BIGGEST FOLDERS'; du -sh /sdcard/* 2>/dev/null | sort -rh | head -12\n"
                     + "echo '== DISKSTATS'; dumpsys diskstats 2>&1 | head -20\n";
                 break;
             default:
-                sh = dev + bat + mem + sto + "echo '== TOP PROCESSES'; " + top + "\n" + thermal + crashes + net;
+                sh = dev + bat + mem + sto + "echo '== TOP PROCESSES'; " + top + "\n" + thermal + crashes + net
+                    + "echo '== SECURITY PATCH'; getprop ro.build.version.security_patch\n";
         }
         Shell.Result r = Shell.run(sh, rootOk, 50);
         out.put("result", r.out);
@@ -569,7 +580,7 @@ final class Agent {
             : act.equals("swipe") ? " (" + x + "," + y + " -> " + x2 + "," + y2 + ")" : text.isEmpty() ? "" : " \"" + text + "\"");
         int st = ui.step("screen", purpose, desc);
         if (!allow(purpose, "[פעולת מסך] " + desc, false, "modifies", true)) {
-            out.put("result", "USER_DENIED");
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -620,7 +631,7 @@ final class Agent {
         }
         boolean heavy = act.equals("hide_app") || act.equals("suspend_app");
         if (!allow(purpose, "[מנהל מכשיר] " + act + " " + pkg + " " + perm + "\n\n\u21A9 ניתן לביטול מיומן השינויים.", false, heavy ? "dangerous" : "modifies", true)) {
-            out.put("result", "USER_DENIED");
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -711,7 +722,7 @@ final class Agent {
             return;
         }
         if (!allow(purpose, "[רצף פעולות מסך]\n" + a.getString("steps"), false, "modifies", true)) {
-            out.put("result", "USER_DENIED");
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -866,7 +877,7 @@ final class Agent {
         String purpose = a.optString("purpose", "גיבוי האפליקציה " + pkg);
         int st = ui.step("cmd", purpose, "app_backup " + pkg);
         if (!allow(purpose, "[גיבוי אפליקציה] " + pkg + (rootOk ? " (קובץ ההתקנה והנתונים)" : " (קובץ ההתקנה בלבד, בלי root)"), false, "modifies", true)) {
-            out.put("result", "USER_DENIED");
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -882,7 +893,7 @@ final class Agent {
         String purpose = a.optString("purpose", "שחזור אפליקציה מגיבוי");
         int st = ui.step("cmd", purpose, "app_restore " + id);
         if (!allow(purpose, "[שחזור אפליקציה] " + id + "\nהגרסה והנתונים הנוכחיים יוחלפו בגיבוי. לפני כן יישמר גיבוי של המצב הנוכחי.", true, "dangerous", true, true)) {
-            out.put("result", "USER_DENIED");
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -930,7 +941,7 @@ final class Agent {
         String note = rootOk ? (installed ? "עדכון של אפליקציה קיימת. לפני ההתקנה יישמר גיבוי שלה." : "התקנה חדשה. אפשר לבטל (הסרה) מיומן השינויים.")
             : "בלי root ייפתח מתקין המערכת, ושם צריך ללחוץ \"התקן\".";
         if (!allow(purpose, "[התקנת אפליקציה] " + path + (down ? " (כולל שנמוך גרסה)" : "") + "\n\n" + note, rootOk, "dangerous", true)) {
-            out.put("result", "USER_DENIED");
+            out.put("result", "USER_DENIED: refused. Do not retry it; continue the rest of the task and give the complete final answer with all findings.");
             ui.stepDone(st, false, "נדחה על ידך", null);
             return;
         }
@@ -1019,9 +1030,11 @@ final class Agent {
             + "ANSWER QUALITY (most important): answer exactly what the user asked, fully and in detail. Investigate with your tools BEFORE answering; never answer a request from the quick scan alone, "
             + "never reply with only a question, and never repeat a question the user already refused to answer: find it out yourself.\n"
             + "PLAYBOOKS (follow them):\n"
-            + "- 'health check' / 'בדיקת בריאות': call inspect_system with focus general, battery, performance, storage AND network (in parallel, one response), plus crash history; "
-            + "then a full report with a section per area (battery: level, health, temperature, cycles if known; storage; RAM; CPU/heat; network; crashing apps; security patch age; disabled important apps), "
-            + "each marked תקין / דורש תשומת לב / בעיה with the real numbers, then concrete recommendations. Do not change anything in a health check.\n"
+            + "- 'health check' / 'בדיקת בריאות': call inspect_system with focus general, battery, performance, storage, network AND crashes in ONE response (6 parallel calls). "
+            + "A health check is a REPORT: do not change anything and do not ask to change anything during it (no clearing data, no restarts). "
+            + "Thresholds: storage free <10% attention, <5% problem; RAM available <15% attention; battery health not Good or temperature >40C problem, >37C attention; "
+            + "uptime >14 days suggest restart; security patch older than 12 months attention; an app with 3+ crashes/ANRs in the history attention (name it, count, dates); "
+            + "system_server crashes or watchdog = problem. Never suggest a factory reset in a health check unless there is clear evidence of system damage, and then only as a last resort.\n"
             + "- 'APK will not install' / 'לא מצליח להתקין': find_files with a word from the app name (type archive; also try English/Hebrew variants) -> apk_info on the best match "
             + "(several matches: newest, or ask_user buttons) -> explain the exact reason from the VERDICT (signature conflict with an installed copy, Android too old, CPU, split part, damaged/incomplete download, blocked unknown sources) "
             + "and what to do; offer apk_install. Also check the installer log: logcat -d | grep -i -E 'PackageInstaller|INSTALL_FAILED|PackageManager' | tail -40 (root=true if available).\n"
@@ -1067,9 +1080,15 @@ final class Agent {
             + "Say plainly in Hebrew that you could not check that part (e.g. 'לא הצלחתי לבדוק את X') and why if known, report only what you actually measured, and continue with what you can check. "
             + "A failed check is a reason to try another way (root=true, a different command, the screen), not to stop investigating. "
             + "Base fixes on evidence you actually saw (a crash log, an error, a wrong setting); a general health check with no real problem found ends with a report, not with changes.\n"
-            + "FINAL ANSWER (Hebrew, detailed and organized with short headings or bullets, clear words, explain technical terms in one phrase): "
-            + "1) a direct answer to the question in the first sentence; 2) what you checked and what you found, with the real numbers; 3) the cause (say if proven or only possible); "
-            + "4) what you did and the result (verified or not); 5) what remains for the user, step by step. End with a question only if you are truly blocked.";
+            + "FINAL ANSWER: write in Hebrew only (no words in other languages or scripts except technical names), organized like a clear report, using this structure with bold headings:\n"
+            + "**בקצרה:** 1-2 sentences that directly answer the question (e.g. 'הטלפון במצב טוב חוץ מאחסון כמעט מלא').\n"
+            + "**מה בדקתי ומה מצאתי:** one bullet per area or check: status (✅ תקין / ⚠️ דורש תשומת לב / ❌ בעיה), the real numbers or the exact log line, and in plain words what it means.\n"
+            + "**הסיבה:** what causes the problem, marked as proven (with the evidence) or as a possibility.\n"
+            + "**מה עשיתי:** actions taken and their verified result (omit if none).\n"
+            + "**מה מומלץ לעשות:** numbered steps, most important first; say which ones you can do for the user if asked.\n"
+            + "Rules: every conclusion must point to a finding written above; never write 'לאור הממצאים' or 'הבעיות שמצאתי' without listing them; never call something a bug or failure without showing the evidence. "
+            + "The final answer is SELF-CONTAINED: after the user approves or refuses something mid-task, continue the remaining checks and then repeat ALL findings of the task in the final answer, not only the latest step. "
+            + "End with a question only if you are truly blocked.";
     }
 
     private JSONObject body() throws JSONException {
@@ -1087,7 +1106,7 @@ final class Agent {
             new String[][]{{"query", "string", "App name (any language) or exact package name."},
                 {"purpose", "string", "Short Hebrew sentence."}}, "query", "purpose"));
         d.put(fn("inspect_system", "Complete system report in a single call.",
-            new String[][]{{"focus", "string", "general, battery, performance, network or storage."},
+            new String[][]{{"focus", "string", "general, battery, performance, network, storage or crashes (crash/ANR history per app for several days, needs root or DUMP)."},
                 {"purpose", "string", "Short Hebrew sentence."}}, "focus", "purpose"));
         d.put(fn("take_screenshot", "Screenshot of the phone screen; the image is returned to you. Pass package to open an app first.",
             new String[][]{{"purpose", "string", "Short Hebrew sentence."},

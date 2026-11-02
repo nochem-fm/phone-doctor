@@ -80,13 +80,13 @@ final class Journal {
 
     static List<Op> parse(String cmd) {
         List<Op> ops = new ArrayList<Op>();
-        Matcher m = REDIR.matcher(cmd);
+        Matcher m = REDIR.matcher(Safety.unquoted(cmd));
         while (m.find()) {
             String path = m.group(1);
             if (path.startsWith("/dev/")) continue;
             ops.add(new Op(path.startsWith("/sys/") || path.startsWith("/proc/") ? "SYSFS" : "FILEEDIT", path));
         }
-        for (String raw : cmd.split("\\n|;|&&|\\|\\||\\|")) {
+        for (String raw : Safety.segments(cmd)) {
             String seg = raw.replaceAll("\\d*>>?\\s*\\S+", " ").trim();
             if (seg.isEmpty() || Safety.readOnly(seg)) continue;
             segOps(tokens(seg), ops);
