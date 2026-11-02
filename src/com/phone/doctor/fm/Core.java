@@ -32,7 +32,27 @@ final class Core {
     static volatile Pending pending;
     static String queue;               // message typed while the agent was busy
     static String lastReply = "";
-    static String assistB64, assistText;   // screen captured by the digital-assistant gesture
+    static String assistB64, assistText;   // screen captured by the digital-assistant gesture / quick-settings tile
+    static long assistAt;                   // when it was captured: an old capture is never attached
+
+    static void setAssist(String b64, String txt) {
+        assistB64 = b64;
+        assistText = txt;
+        assistAt = System.currentTimeMillis();
+    }
+
+    static void clearAssist() {
+        assistB64 = null;
+        assistText = null;
+        assistAt = 0;
+    }
+
+    /** A capture waiting to be attached to the next message (expires after 15 minutes). */
+    static boolean hasAssist() {
+        if ((assistB64 == null && (assistText == null || assistText.isEmpty()))) return false;
+        if (System.currentTimeMillis() - assistAt > 15 * 60000L) { clearAssist(); return false; }
+        return true;
+    }
     static final Handler H = new Handler(Looper.getMainLooper());
 
     static final class Pending {
@@ -97,7 +117,7 @@ final class Core {
     static void send(String text) {
         SharedPreferences p = prefs();
         ensureAgent();
-        if (assistB64 == null && (assistText == null || assistText.isEmpty())) {
+        if (!hasAssist()) {
             String local = null;
             // never answer locally when the agent just asked the user something: the message is a reply, not a new question
             String lr = lastReply == null ? "" : lastReply.trim();
@@ -135,13 +155,12 @@ final class Core {
         agent.actions = 0;
 
         String shown = text;
-        if (assistB64 != null || (assistText != null && !assistText.isEmpty())) {
+        if (hasAssist()) {
             if (assistB64 != null) agent.attachImage(assistB64);
             if (assistText != null && !assistText.isEmpty())
                 agent.attachText("[Text on the screen the user was looking at when they invoked the assistant]\n" + assistText);
             shown += assistB64 != null ? "\n\uD83D\uDCCE צילום מסך מצורף" : "\n\uD83D\uDCCE טקסט המסך מצורף";
-            assistB64 = null;
-            assistText = null;
+            clearAssist();
         }
         if (curId == null) curId = String.valueOf(System.currentTimeMillis());
         steps = new JSONArray();

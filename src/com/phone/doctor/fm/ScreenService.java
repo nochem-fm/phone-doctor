@@ -62,8 +62,7 @@ public class ScreenService extends AccessibilityService {
                 String txt = dump();
                 String b64 = null;
                 try { b64 = Agent.jpeg(shot(), 1024, 70); } catch (Exception ignored) { }
-                Core.assistB64 = b64;
-                Core.assistText = txt;
+                Core.setAssist(b64, txt);
                 new Handler(Looper.getMainLooper()).post(new Runnable() {
                     public void run() {
                         try {

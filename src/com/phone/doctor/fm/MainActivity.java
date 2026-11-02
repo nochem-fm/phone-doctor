@@ -177,7 +177,8 @@ public class MainActivity extends Activity {
         }
         if (i != null && i.getBooleanExtra("assist", false) && prefs.getBoolean("setup", false)) {
             i.removeExtra("assist");
-            showChat();
+            if (!Core.running && Core.uiLog.length() > 0) newChat(true);   // a capture starts its own chat
+            else showChat();
             toast("צילום המסך נקלט. כתוב מה הבעיה");
             if (input != null) input.requestFocus();
         }
@@ -1298,13 +1299,9 @@ public class MainActivity extends Activity {
         }
         replaying = false;
         if (n > 0) scrollDown();
-        boolean hasAssist = Core.assistB64 != null || Core.assistText != null;
+        boolean hasAssist = Core.hasAssist();
         if (n > 0 || hasAssist) greeting.setVisibility(View.GONE);
-        if (hasAssist) {
-            TextView h = tv("\uD83D\uDCCE צילום המסך שהיית בו נקלט ויצורף להודעה הבאה. כתוב מה הבעיה.", 14, ACC);
-            h.setPadding(0, dp(8), 0, dp(8));
-            chat.addView(h);
-        }
+        if (hasAssist) chat.addView(assistChip());
         keepScreen(Core.running);
     }
 
@@ -1840,8 +1837,43 @@ public class MainActivity extends Activity {
 
     // ================================================================= history
 
-    void newChat() {
+    /** The waiting capture, with a thumbnail and a button to drop it. */
+    View assistChip() {
+        final LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(rr(SURF, 14));
+        row.setPadding(dp(10), dp(8), dp(6), dp(8));
+        if (Core.assistB64 != null) {
+            View th = thumb(Core.assistB64);
+            if (th instanceof ImageView) { ((ImageView) th).setMaxHeight(dp(64)); ((ImageView) th).setMaxWidth(dp(40)); }
+            row.addView(th, new LinearLayout.LayoutParams(W, W));
+        }
+        TextView h = tv((Core.assistB64 != null ? "צילום המסך" : "טקסט המסך") + " יצורף להודעה הבאה", 13, TXT);
+        h.setPadding(dp(10), 0, dp(6), 0);
+        row.addView(h, lp(0, W, 1f));
+        TextView x = tv("\u2715 הסר", 13, ACC);
+        x.setPadding(dp(10), dp(8), dp(10), dp(8));
+        click(x, new Runnable() {
+            public void run() {
+                Core.clearAssist();
+                row.setVisibility(View.GONE);
+                toast("הצילום הוסר");
+            }
+        });
+        row.addView(x);
+        LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(M, W);
+        l.topMargin = dp(8);
+        l.bottomMargin = dp(8);
+        row.setLayoutParams(l);
+        return row;
+    }
+
+    void newChat() { newChat(false); }
+
+    /** keepAssist: the screen capture just taken goes to the new chat (tile / assistant); "+" starts clean. */
+    void newChat(boolean keepAssist) {
         if (Core.running) { toast("הסוכן עדיין עובד. לחץ על \u25A0 כדי לעצור"); return; }
+        if (!keepAssist) Core.clearAssist();
         Core.saveChat();
         Core.agent = null;
         Core.curId = null;

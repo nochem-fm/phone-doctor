@@ -32,8 +32,7 @@ public class AssistSessionService extends VoiceInteractionSessionService {
         public void onShow(Bundle args, int flags) {
             super.onShow(args, flags);
             launched = false;
-            Core.assistB64 = null;
-            Core.assistText = null;
+            Core.clearAssist();
             h.postDelayed(fallback, 1200);
         }
 
@@ -43,7 +42,7 @@ public class AssistSessionService extends VoiceInteractionSessionService {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < structure.getWindowNodeCount() && sb.length() < 6000; i++)
                 walk(structure.getWindowNodeAt(i).getRootViewNode(), sb, 0);
-            Core.assistText = sb.toString();
+            Core.setAssist(Core.assistB64, sb.toString());
         }
 
         @Override
@@ -54,7 +53,7 @@ public class AssistSessionService extends VoiceInteractionSessionService {
                     Bitmap b = mx > 1024 ? Bitmap.createScaledBitmap(shot, w * 1024 / mx, hgt * 1024 / mx, true) : shot;
                     ByteArrayOutputStream bo = new ByteArrayOutputStream();
                     b.compress(Bitmap.CompressFormat.JPEG, 70, bo);
-                    Core.assistB64 = Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
+                    Core.setAssist(Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP), Core.assistText);
                 } catch (Exception ignored) { }
             }
             h.removeCallbacks(fallback);
