@@ -278,6 +278,22 @@ final class ApkTools {
         return null;
     }
 
+    /**
+     * Runs a streaming install. Returns the final report, or null when streaming itself is not supported on this
+     * phone (then the caller falls back to copying into /data/local/tmp).
+     */
+    private static String streamRun(String script, String opts) {
+        String out = Shell.run(script, true, 600).out.trim();
+        if (out.contains("Success")) return "OK installed (streamed, no copy)." + (out.contains("OBB_COPIED") ? " OBB data copied." : "");
+        if (opts.contains("--bypass") && (out.contains("Unknown option") || out.contains("unrecognized option"))) {
+            out = Shell.run(script.replace(" --bypass-low-target-sdk-block", ""), true, 600).out.trim();
+            if (out.contains("Success")) return "OK installed (streamed, no copy).";
+        }
+        String ex = explain(out);
+        if (ex != null) return "FAILED: " + ex + "\nraw: " + (out.length() > 800 ? out.substring(0, 800) : out);
+        return null;   // NO_SESSION / WRITE_FAILED / -S not supported / unreadable stdin: try the copy method
+    }
+
     /** Installs .apk / .apks / .xapk. With root: pm install(-multiple); without root: opens the system installer. */
     static String install(Context c, String path, boolean rootOk, boolean allowDowngrade) {
         File f = new File(path);
@@ -338,10 +354,28 @@ final class ApkTools {
                 return "FAILED: cannot open the bundle: " + e.getMessage();
             }
             if (parts == 0) return "FAILED: no APK files inside the bundle";
+            // 1st choice: stream every part into one install session (no copy to /data/local/tmp)
+            File[] ps = ex.listFiles();
+            StringBuilder st = new StringBuilder("S=$(pm install-create " + opts + " 2>&1 | sed -n 's/.*\\[\\([0-9]*\\)\\].*/\\1/p'); [ -n \"$S\" ] || { echo NO_SESSION; exit 1; }; ");
+            if (ps != null) for (File pf : ps) if (pf.getName().endsWith(".apk"))
+                st.append("pm install-write -S ").append(pf.length()).append(" $S ").append(q(pf.getName())).append(" - < ").append(q(pf.getPath())).append(" >/dev/null 2>&1 || { echo WRITE_FAILED; pm install-abandon $S; exit 1; }; ");
+            if (obb) st.append("mkdir -p /sdcard/Android/obb && cp -r ").append(q(ex.getPath() + "/obb")).append("/* /sdcard/Android/obb/ && echo OBB_COPIED; ");
+            st.append("pm install-commit $S 2>&1");
+            if (Build.VERSION.SDK_INT >= 21) {
+                String so = streamRun(st.toString(), opts);
+                if (so != null) { Shell.run("rm -rf " + q(ex.getPath()), true, 60); return so; }
+            }
             sh.append("cp ").append(q(ex.getPath())).append("/*.apk ").append(t).append("/ && chmod 644 ").append(t).append("/*.apk; ");
             if (obb) sh.append("mkdir -p /sdcard/Android/obb && cp -r ").append(q(ex.getPath() + "/obb")).append("/* /sdcard/Android/obb/ && echo OBB_COPIED; ");
             sh.append("pm install-multiple ").append(opts).append(" ").append(t).append("/*.apk 2>&1; rm -rf ").append(q(ex.getPath())).append("; ");
         } else {
+            // 1st choice: stream the file straight into pm (no copy); root opens it, pm reads it from stdin
+            if (Build.VERSION.SDK_INT >= 21) {
+                long size = f.length();
+                String sz = size > 0 ? String.valueOf(size) : "$(stat -c %s " + q(path) + " 2>/dev/null || wc -c < " + q(path) + ")";
+                String so = streamRun("pm install " + opts + " -S " + sz + " < " + q(path) + " 2>&1", opts);
+                if (so != null) return so;
+            }
             sh.append("cp ").append(q(path)).append(" ").append(t).append("/a.apk && chmod 644 ").append(t).append("/a.apk && pm install ").append(opts).append(" ").append(t).append("/a.apk 2>&1; ");
         }
         sh.append("rm -rf ").append(t);

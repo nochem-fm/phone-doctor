@@ -1074,6 +1074,7 @@ final class Agent {
             + "FIND IT YOURSELF: when the user mentions a file, app or setting, locate it with your tools (find_files, inspect_app, usage stats) before asking; ask only what tools truly cannot tell, and then with ask_user buttons.\n"
             + "FACTS VS GUESSES: say exactly what each check proved. A header/metadata check does not prove a file is whole; low RAM or storage is a POSSIBLE cause, not a proven one, unless you measured it during the problem. Label guesses as possibilities.\n"
             + "TOOLS THAT DO NOT EXIST: there is no ffmpeg, python, curl or busybox unless you checked with 'command -v'. Use the built-in tools (inspect_files remux/media_deep) instead.\n"
+            + "INSTALLING / TEST-INSTALLING an APK (also just to see the exact error): ALWAYS use apk_install. It streams the file into the installer in one step (no copying to /data/local/tmp) and explains the error. Never copy APKs or run pm install yourself with run_command.\n"
             + "APK FILES: for 'the app does not install' or a downloaded APK, run apk_info first (compatibility, signature, fake check), then apk_install.\n"
             + "APP CRASHES: use reproduce_app first: one call opens the app and returns whether it stayed alive, the crash log, memory and a screenshot.\n"
             + "CHOICES: when the user must decide between options (for example clear cache / clear data / do nothing), use ask_user with buttons instead of asking in text.\n"
