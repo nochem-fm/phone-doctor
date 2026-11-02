@@ -906,6 +906,15 @@ public class MainActivity extends Activity {
 
     // ---- keyboard: make sure tapping a text field always opens it (some devices/ROMs do not)
 
+    /** Closes the keyboard after a message is sent, so the answer has the whole screen. */
+    void hideIme() {
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null && input != null) imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
+            if (input != null) input.clearFocus();
+        } catch (Exception ignored) { }
+    }
+
     void showIme(final EditText e) {
         InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (imm != null) imm.showSoftInput(e, InputMethodManager.SHOW_IMPLICIT);
@@ -1188,7 +1197,7 @@ public class MainActivity extends Activity {
             TextView t = tv(c, 15, TXT);
             t.setBackground(rr(SURF, 16));
             t.setPadding(dp(16), dp(12), dp(16), dp(12));
-            click(t, new Runnable() { public void run() { onSend(c); } });
+            click(t, new Runnable() { public void run() { hideIme(); onSend(c); } });
             LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(W, W);
             l.bottomMargin = dp(8);
             g.addView(t, l);
@@ -1225,6 +1234,7 @@ public class MainActivity extends Activity {
                 if (!t.isEmpty()) {
                     stopDictation();
                     input.setText("");
+                    hideIme();
                     onSend(t);
                 }
             }
@@ -1241,6 +1251,7 @@ public class MainActivity extends Activity {
                     Core.queue = t;
                     stopDictation();
                     input.setText("");
+                    hideIme();
                     toast("ההודעה תישלח כשהסוכן יסיים");
                 }
             }
