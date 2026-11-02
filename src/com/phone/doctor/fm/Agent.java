@@ -191,6 +191,12 @@ final class Agent {
                 }
                 toolsUsed += calls.size();
                 String think = text.toString().trim();
+                boolean asks = false;
+                for (JSONObject c : calls) if ("ask_user".equals(c.optString("name"))) asks = true;
+                if (asks && think.length() > 150) {   // the diagnosis comes with the options: show it as an answer
+                    ui.reply(think);
+                    think = "";
+                }
                 if (!think.isEmpty()) {
                     String first = think.split("\n")[0];
                     int st = ui.step("think", first.length() > 80 ? first.substring(0, 80) + "…" : first, "");
@@ -472,6 +478,19 @@ final class Agent {
                 break;
             case "crashes":
                 sh = dev + history + crashes;
+                break;
+            case "boot":
+                sh = dev
+                    + "echo '== BOOT REASONS'; for p in sys.boot.reason ro.boot.bootreason persist.sys.boot.reason sys.boot.reason.last persist.sys.boot.reason.history; do echo \"$p=$(getprop $p)\"; done\n"
+                    + "echo \"boot_count=$(settings get global boot_count 2>/dev/null)\"\n"
+                    + "echo '== BOOT / RESTART / SYSTEM CRASH EVENTS PER DAY (system dropbox)'; "
+                    + "dumpsys dropbox 2>/dev/null | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]+ (SYSTEM_BOOT|SYSTEM_RESTART|system_server_crash|system_server_watchdog|system_server_anr|system_server_wtf|SYSTEM_TOMBSTONE|SYSTEM_LAST_KMSG|SYSTEM_RECOVERY_LOG|SYSTEM_FSCK|kernel_panic|SYSTEM_AUDIT)' "
+                    + "| awk '{print $1, $3}' | sort | uniq -c\n"
+                    + "echo '== LAST 40 SUCH EVENTS (time, type)'; dumpsys dropbox 2>/dev/null | grep -E 'SYSTEM_BOOT|SYSTEM_RESTART|system_server_(crash|watchdog|anr)|SYSTEM_TOMBSTONE|SYSTEM_LAST_KMSG|kernel_panic' | tail -40\n"
+                    + "echo '== LAST system_server CRASH'; dumpsys dropbox --print system_server_crash 2>/dev/null | grep -v '^\\s*$' | head -40\n"
+                    + "echo '== LAST WATCHDOG'; dumpsys dropbox --print system_server_watchdog 2>/dev/null | grep -E 'Subject|Blocked|WATCHDOG|held by' | head -15\n"
+                    + "echo '== LAST TOMBSTONES'; ls -lt /data/tombstones 2>/dev/null | head -8; for f in $(ls -t /data/tombstones/tombstone_* 2>/dev/null | head -2); do echo \"-- $f\"; grep -E '^(Build|ABI|pid|signal|Abort|Cause)' $f | head -6; done\n"
+                    + "echo '== KERNEL LOG OF THE PREVIOUS BOOT (pstore/last_kmsg)'; (ls /sys/fs/pstore 2>/dev/null; tail -25 /sys/fs/pstore/console-ramoops* 2>/dev/null || tail -25 /proc/last_kmsg 2>/dev/null) | head -40\n";
                 break;
             case "storage":
                 sh = dev + sto + "echo '== BIGGEST FOLDERS'; du -sh /sdcard/* 2>/dev/null | sort -rh | head -12\n"
@@ -1142,7 +1161,18 @@ final class Agent {
             + "GOAL: the user describes a problem (an app that does not work, a permission that does not take effect, battery, lag, network...). Find the root cause and fix it yourself, end to end, without asking the user for things you can find out or do alone.\n"
             + "ANSWER QUALITY (most important): answer exactly what the user asked, fully and in detail. Investigate with your tools BEFORE answering; never answer a request from the quick scan alone, "
             + "never reply with only a question, and never repeat a question the user already refused to answer: find it out yourself.\n"
+            + "HOW TO ANSWER A 'WHY / WHAT HAPPENED' QUESTION (diagnosis). Work in two parts:\n"
+            + "PART 1, investigate before you conclude: note the exact symptom and WHEN it happened (e.g. 'a few days ago'). In ONE response call every relevant source for that symptom and period "
+            + "(logs, crash/boot history, app reports), not just one grep. Then correlate by TIME and MECHANISM with the symptom. Do not settle on the first thing you see.\n"
+            + "RELEVANCE: rank every finding: (a) most likely cause, with the evidence; (b) possibly related, with why; leave out what is clearly unrelated entirely. "
+            + "A general fact (low storage, an app that crashed once, a Google service log line) is NOT a cause unless its time or mechanism matches the symptom: do not mention it as a cause, at most once as a side note. "
+            + "If the user says your conclusion is unrelated, drop it and investigate the period they describe; never repeat a rejected conclusion.\n"
+            + "PART 2, options instead of deciding alone: after the findings, offer 2-4 next steps (deeper checks you can run, or fixes), each with what it would show or fix and its risk, "
+            + "and give them to the user with ask_user (the answer text you write together with the ask_user call is shown to the user as your answer). "
+            + "Run read-only checks yourself without asking; ask before longer investigations and before ANY change. After the choice, do it and report in the same structure.\n"
             + "PLAYBOOKS (follow them):\n"
+            + "- reboots / boot loops / 'הפלאפון נתקע באתחול' / 'לופים': inspect_system focus=boot (and crashes) FIRST: boot reasons, events per day, system_server crashes and watchdogs, tombstones, kernel panics. "
+            + "Match the dates to what the user said; explain what the system was doing before each reboot. Storage is relevant only if the log shows write/space errors at that time.\n"
             + "- 'health check' / 'בדיקת בריאות': call inspect_system with focus general, battery, performance, storage, network AND crashes in ONE response (6 parallel calls). "
             + "A health check is a REPORT: do not change anything and do not ask to change anything during it (no clearing data, no restarts). "
             + "Thresholds: storage free <10% attention, <5% problem; RAM available <15% attention; battery health not Good or temperature >40C problem, >37C attention; "
@@ -1201,7 +1231,9 @@ final class Agent {
             + "Say plainly in Hebrew that you could not check that part (e.g. 'לא הצלחתי לבדוק את X') and why if known, report only what you actually measured, and continue with what you can check. "
             + "A failed check is a reason to try another way (root=true, a different command, the screen), not to stop investigating. "
             + "Base fixes on evidence you actually saw (a crash log, an error, a wrong setting); a general health check with no real problem found ends with a report, not with changes.\n"
-            + "FINAL ANSWER: write in Hebrew only (no words in other languages or scripts except technical names), organized like a clear report, using this structure with bold headings:\n"
+            + "DIAGNOSIS ANSWER (why/what happened): Hebrew only, bold headings: **ההסבר הכי סביר:** (with the evidence: dates, counts, the exact log lines in short) -> **כנראה קשור:** -> **אולי קשור:** (omit unrelated) -> "
+            + "**כמה בטוח אני:** (high/medium/low and what would confirm it) -> **מה אפשר לעשות עכשיו:** numbered options, then the ask_user call with the same options.\n"
+            + "REPORT ANSWER (health check, status questions, after finishing a fix): Hebrew only (no words in other languages or scripts except technical names), organized like a clear report, using this structure with bold headings:\n"
             + "**בקצרה:** 1-2 sentences that directly answer the question (e.g. 'הטלפון במצב טוב חוץ מאחסון כמעט מלא').\n"
             + "**מה בדקתי ומה מצאתי:** one bullet per area or check: status (✅ תקין / ⚠️ דורש תשומת לב / ❌ בעיה), the real numbers or the exact log line, and in plain words what it means.\n"
             + "**הסיבה:** what causes the problem, marked as proven (with the evidence) or as a possibility.\n"
@@ -1228,7 +1260,7 @@ final class Agent {
             new String[][]{{"query", "string", "App name (any language) or exact package name."},
                 {"purpose", "string", "Short Hebrew sentence."}}, "query", "purpose"));
         d.put(fn("inspect_system", "Complete system report in a single call.",
-            new String[][]{{"focus", "string", "general, battery, performance, network, storage or crashes (crash/ANR history per app for several days, needs root or DUMP)."},
+            new String[][]{{"focus", "string", "general, battery, performance, network, storage, crashes (crash/ANR history per app for several days) or boot (reboots, boot loops, system_server crashes, watchdog, tombstones, kernel panics, boot reasons, events per day). crashes/boot need root or DUMP."},
                 {"purpose", "string", "Short Hebrew sentence."}}, "focus", "purpose"));
         d.put(fn("take_screenshot", "Screenshot of the phone screen; the image is returned to you. Pass package to open an app first.",
             new String[][]{{"purpose", "string", "Short Hebrew sentence."},
