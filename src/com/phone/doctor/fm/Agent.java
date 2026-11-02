@@ -261,6 +261,7 @@ final class Agent {
                 case "app_settings_action": appSettingsAction(args, out); break;
                 case "app_uninstall": appUninstall(args, out); break;
                 case "find_files": findFiles(args, out); break;
+                case "investigate": investigate(args, out); break;
                 case "apk_install": apkInstall(args, out); break;
                 default: out.put("error", "unknown tool " + name);
             }
@@ -1036,6 +1037,18 @@ final class Agent {
         ui.stepDone(st, r.startsWith("OK") || r.startsWith("OPENED"), r, null);
     }
 
+    private void investigate(JSONObject a, JSONObject out) throws Exception {
+        String topic = a.optString("topic", "timeline");
+        String detail = topic + (a.optString("package").isEmpty() ? "" : " " + a.optString("package"))
+            + (a.optString("from").isEmpty() ? "" : " " + a.optString("from") + " -> " + a.optString("to", "now"));
+        int st = ui.step("cmd", a.optString("purpose", "חקירה: " + topic), "investigate " + detail);
+        ui.status("אוסף ראיות (" + topic + ")…");
+        actions++;
+        String r = Investigate.run(ctx, topic, a.optString("package", ""), a.optString("from", ""), a.optString("to", ""), a.optInt("days", 0), rootOk);
+        out.put("result", r.length() > 14000 ? Shell.clip(r) : r);
+        ui.stepDone(st, !r.startsWith("ERROR"), r, null);
+    }
+
     private void findFiles(JSONObject a, JSONObject out) throws Exception {
         String qn = a.optString("name", ""), kind = a.optString("type", "any");
         int st = ui.step("cmd", a.optString("purpose", "מחפש את הקובץ"), "find_files '" + qn + "' " + kind);
@@ -1171,6 +1184,11 @@ final class Agent {
             + "and give them to the user with ask_user (the answer text you write together with the ask_user call is shown to the user as your answer). "
             + "Run read-only checks yourself without asking; ask before longer investigations and before ANY change. After the choice, do it and report in the same structure.\n"
             + "PLAYBOOKS (follow them):\n"
+            + "- the user names a time ('אתמול בערב', 'לפני שעה', 'מאז יום ראשון'): investigate timeline for that window (convert to dates; today is " + new java.text.SimpleDateFormat("yyyy-MM-dd EEEE HH:mm", java.util.Locale.US).format(new java.util.Date()) + ").\n"
+            + "- 'it started N days ago' / 'since the update': investigate app_changes (and timeline around that day).\n"
+            + "- app closes in background / notifications do not arrive: investigate background with the package.\n"
+            + "- battery drains: investigate battery_drain. Internet/app cannot connect: investigate network. Slow/hot: investigate performance. "
+            + "Bluetooth/headphones/no sound: investigate bluetooth_audio. 'is someone spying / camera light': investigate privacy. Storage filled up: investigate storage_growth.\n"
             + "- reboots / boot loops / 'הפלאפון נתקע באתחול' / 'לופים': inspect_system focus=boot (and crashes) FIRST: boot reasons, events per day, system_server crashes and watchdogs, tombstones, kernel panics. "
             + "Match the dates to what the user said; explain what the system was doing before each reboot. Storage is relevant only if the log shows write/space errors at that time.\n"
             + "- 'health check' / 'בדיקת בריאות': call inspect_system with focus general, battery, performance, storage, network AND crashes in ONE response (6 parallel calls). "
@@ -1321,6 +1339,20 @@ final class Agent {
             new String[][]{{"package", "string", "Package name."}, {"action", "string", "force_stop, clear_cache, disable, enable or open_permissions"}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "action", "purpose"));
         d.put(fn("app_uninstall", "Uninstall an app. Root: backup first, then pm uninstall (system apps: removed for this user only). Device owner: silent. Otherwise the system asks the user. Core system apps are refused.",
             new String[][]{{"package", "string", "Package name."}, {"keep_data", "boolean", "Keep the app's data (root)."}, {"purpose", "string", "Short Hebrew sentence."}}, "package", "purpose"));
+        d.put(fn("investigate", "Evidence collector for one kind of complaint, everything relevant in one call with dates. topics: "
+                + "timeline (WHAT HAPPENED between from and to: apps opened, screen on/off, unlocks, shutdown/startup, app crashes/ANRs with process and exception, reboots and system crashes, installs/updates; default last 24 h); "
+                + "app_changes (apps installed/updated in the last N days, installer, system build date; 'it started N days ago' -> what changed then); "
+                + "background (package required: why it is closed in the background or its notifications do not arrive: standby bucket, background restrictions, battery exemption, exit reasons with times, system kills, notification channels/DND, Google push connection, its notification history); "
+                + "battery_drain (since last charge: screen-off drain, power per app, wakelocks, wake-up alarms, Doze); "
+                + "network (connection, private DNS/proxy/VPN, Wi-Fi disconnect reasons, signal, validation, and live tests that detect a NetFree/Rimon block page or TLS interception); "
+                + "performance (load, CPU throttling, thermal, memory pressure, low-memory kills per day, exit reasons; with package also its frame drops); "
+                + "bluetooth_audio (bonded/connected devices, profiles, codec, disconnects, audio routing and events); "
+                + "privacy (which app used camera/microphone/location/contacts/SMS/call log and how long ago); "
+                + "storage_growth (biggest apps and growth since the previous run, large files created in the last N days, per folder).",
+            new String[][]{{"topic", "string", "timeline, app_changes, background, battery_drain, network, performance, bluetooth_audio, privacy or storage_growth"},
+                {"package", "string", "For background / performance."}, {"from", "string", "For timeline: 'yyyy-MM-dd HH:mm', 'dd/MM HH:mm', or '-6h' / '-2d'."},
+                {"to", "string", "For timeline, default now."}, {"days", "number", "For app_changes (default 30) / storage_growth (default 7)."},
+                {"purpose", "string", "Short Hebrew sentence."}}, "topic", "purpose"));
         d.put(fn("find_files", "Find files on the phone's storage by PART of the name (any language, case-insensitive), newest first, including Android/media (WhatsApp/Telegram media). Use it whenever the user mentions a file, instead of asking for its path.",
             new String[][]{{"name", "string", "Part of the file name, e.g. a Hebrew word from it. Empty = all files of the type."},
                 {"type", "string", "any, video, audio, image, doc, archive"}, {"purpose", "string", "Short Hebrew sentence."}}, "name", "purpose"));

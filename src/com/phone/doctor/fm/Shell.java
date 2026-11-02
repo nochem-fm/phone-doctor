@@ -31,6 +31,14 @@ final class Shell {
         return r;
     }
 
+    /** Like run(), but returns the whole output (up to 3 MB) for parsing in code. */
+    static Result runFull(String cmd, boolean root, int timeoutSec) {
+        Result r = null;
+        if (root) r = RootShell.run(cmd, timeoutSec);
+        if (r == null) r = spawn(cmd, root, timeoutSec);
+        return r;
+    }
+
     /** Cuts long output for the model and keeps the whole text in a file (see read_output). */
     static String clip(String s) {
         if (s.length() <= MAX) return s;
