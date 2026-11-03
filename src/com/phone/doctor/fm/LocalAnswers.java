@@ -100,6 +100,22 @@ final class LocalAnswers {
         }
     }
 
+    /** The WebView the system really uses (it is not always com.google.android.webview). */
+    static String webview(Context c) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                PackageInfo w = Compat.webviewPackage();
+                if (w != null) return w.packageName + " " + w.versionName + (w.applicationInfo.enabled ? "" : " DISABLED");
+            }
+        } catch (Throwable ignored) { }
+        PackageManager pm = c.getPackageManager();
+        for (String p : new String[]{"com.google.android.webview", "com.android.webview", "com.android.chrome"}) {
+            String st = pkgState(pm, p);
+            if (!st.equals("not installed")) return p + " " + st;
+        }
+        return "unknown";
+    }
+
     static String quickScan(Context c, boolean root) {
         StringBuilder sb = new StringBuilder("[AUTOMATIC QUICK SCAN, collected locally before this message. Starting facts only: it does NOT replace the checks the request needs]\n");
         try {
@@ -131,7 +147,7 @@ final class LocalAnswers {
         PackageManager pm = c.getPackageManager();
         sb.append("Google Play Services: ").append(pkgState(pm, "com.google.android.gms"))
             .append("; Play Store: ").append(pkgState(pm, "com.android.vending"))
-            .append("; Android System WebView: ").append(pkgState(pm, "com.google.android.webview"))
+            .append("; active WebView: ").append(webview(c))
             .append("; Chrome: ").append(pkgState(pm, "com.android.chrome")).append('\n');
         try {
             int dis = 0;

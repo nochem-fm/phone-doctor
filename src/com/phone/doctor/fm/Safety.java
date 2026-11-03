@@ -73,9 +73,24 @@ final class Safety {
         return out;
     }
 
+    private static final Pattern SUBST = Pattern.compile("\\$\\(([^()]*)\\)|`([^`]*)`");
+    private static final Pattern DEVNULL = Pattern.compile("(\\d|&)?>>?\\s*/dev/null|\\d>&\\d");
+    private static final Set<String> KEYWORDS = new HashSet<String>(Arrays.asList(
+        "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}", "esac"));
+
     /** True only if every segment of the command is a known read-only operation. */
     static boolean readOnly(String cmd) {
-        String s = cmd.replace("2>&1", "").replace("2>/dev/null", "").replace(">/dev/null", "");
+        String s = DEVNULL.matcher(cmd).replaceAll(" ");
+        StringBuilder noComments = new StringBuilder();   // drop "# ..." comment lines
+        for (String line : s.split("\n")) if (!line.trim().startsWith("#")) noComments.append(line).append('\n');
+        s = noComments.toString();
+        for (int guard = 0; guard < 20; guard++) {   // $(...) and `...`: allowed when what is inside is read-only
+            java.util.regex.Matcher m = SUBST.matcher(s);
+            if (!m.find()) break;
+            String inner = m.group(1) != null ? m.group(1) : m.group(2);
+            if (!readOnly(inner)) return false;
+            s = s.substring(0, m.start()) + "X" + s.substring(m.end());
+        }
         String u = unquoted(s);
         if (u.contains(">") || u.contains("`") || u.contains("$(") || u.contains("<(")) return false;
         for (String seg : segments(s)) {
@@ -97,14 +112,29 @@ final class Safety {
 
     private static boolean segOk(String seg) {
         if (seg.isEmpty()) return true;
-        String[] t = seg.split("\\s+");
+        String[] t0 = seg.split("\\s+");
+        int k = 0;
+        while (k < t0.length && KEYWORDS.contains(t0[k])) k++;          // "then echo x", "if [ ... ]"
+        while (k < t0.length && t0[k].matches("[A-Za-z_][A-Za-z0-9_]*=\\S*")) k++;   // VAR=value
+        if (k >= t0.length) return true;
+        if (t0[k].equals("for") || t0[k].equals("case")) return true;    // loop/case headers run nothing by themselves
+        if (t0[k].endsWith(")") && t0[k].length() > 1 && k == 0 && !t0[k].contains("(")) {   // a "pattern)" line of a case
+            k++;
+            if (k >= t0.length) return true;
+        }
+        String[] t = java.util.Arrays.copyOfRange(t0, k, t0.length);
+        StringBuilder jb = new StringBuilder();
+        for (String x : t) { if (jb.length() > 0) jb.append(' '); jb.append(x); }
+        seg = jb.toString();
         String c = t[0];
         String a1 = t.length > 1 ? t[1] : "";
         switch (c) {
             case "dumpsys": return t.length <= 4 && !anyMutating(t);
-            case "pm": return a1.equals("list") || a1.equals("path") || a1.equals("dump") || a1.startsWith("get-");
+            case "pm": return a1.equals("list") || a1.equals("path") || a1.equals("dump") || a1.startsWith("get-") || a1.equals("resolve-activity") || a1.startsWith("query-");
             case "settings": return a1.equals("get") || a1.equals("list");
-            case "cmd": return a1.equals("package") && t.length > 2 && (t[2].equals("list") || t[2].equals("resolve-activity"));
+            case "cmd": return a1.equals("package") && t.length > 2 && (t[2].equals("list") || t[2].equals("resolve-activity") || t[2].startsWith("query-") || t[2].equals("path"));
+            case "[": case "[[": case "test": case "true": case "false": case ":": return true;
+            case "awk": return !seg.contains("system(") && !seg.contains(" > ");
             case "am": return a1.equals("stack") || a1.equals("get-current-user");
             case "appops": return a1.equals("get");
             case "service": return a1.equals("list") || a1.equals("check");

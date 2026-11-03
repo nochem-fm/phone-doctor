@@ -79,6 +79,8 @@ final class Compat {
     /** A PendingIntent the system may fill in (install/uninstall results). */
     static int mutable() { return Build.VERSION.SDK_INT >= 31 ? 0x02000000 : 0; }
 
+    static PackageInfo webviewPackage() { return android.webkit.WebView.getCurrentWebViewPackage(); }
+
     static int immutable() {
         return Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
     }

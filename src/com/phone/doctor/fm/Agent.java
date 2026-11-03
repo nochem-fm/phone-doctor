@@ -114,6 +114,47 @@ final class Agent {
         this.rootOk = rootOk;
     }
 
+    static boolean isReboot(String cmd) {
+        String c = Safety.unquoted(cmd).toLowerCase(java.util.Locale.ROOT);
+        return c.matches("(?s).*(^|[;&|\\s])(reboot|svc power reboot|setprop sys\\.powerctl reboot)(\\s|$|;).*");
+    }
+
+    private static boolean needsRoot(String out) {
+        String o = out.toLowerCase(java.util.Locale.ROOT);
+        return o.contains("permission denial") || o.contains("securityexception") || o.contains("can't find service") || o.contains("permission denied")
+            || o.contains("not allowed") || o.contains("requires android.permission") || o.contains("operation not permitted");
+    }
+
+    /**
+     * A conversation saved in the middle of a tool call (the app was killed, or the phone rebooted by our own command)
+     * would make Gemini reject the next request. Close those calls with an honest result first.
+     */
+    private void closeDangling() {
+        try {
+            int n = contents.length();
+            if (n == 0) return;
+            JSONObject last = contents.getJSONObject(n - 1);
+            if (!"model".equals(last.optString("role"))) return;
+            JSONArray parts = last.optJSONArray("parts");
+            if (parts == null) return;
+            long rb = Core.prefs().getLong("reboot_at", 0);
+            boolean rebooted = rb > 0 && String.valueOf(Core.curId).equals(Core.prefs().getString("reboot_chat", "")) && System.currentTimeMillis() - rb < 3 * 3600000L
+                && android.os.SystemClock.elapsedRealtime() < System.currentTimeMillis() - rb;   // uptime shorter than the time since the command
+            JSONArray out = new JSONArray();
+            for (int i = 0; i < parts.length(); i++) {
+                JSONObject p = parts.getJSONObject(i);
+                if (!p.has("functionCall")) continue;
+                String res = rebooted ? "The phone rebooted as requested at " + new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(new java.util.Date(rb))
+                    + " and is now running again (uptime " + (android.os.SystemClock.elapsedRealtime() / 60000) + " min). The conversation continues after the reboot."
+                    : "No result: the app was closed before this finished.";
+                out.put(new JSONObject().put("functionResponse", new JSONObject().put("name", p.getJSONObject("functionCall").getString("name"))
+                    .put("response", new JSONObject().put("result", res))));
+            }
+            if (out.length() > 0) contents.put(new JSONObject().put("role", "user").put("parts", out));
+            if (rebooted) Core.prefs().edit().remove("reboot_at").apply();
+        } catch (Exception ignored) { }
+    }
+
     private static int hebrew(String p) {
         int n = 0;
         for (int i = 0; i < p.length(); i++) { char ch = p.charAt(i); if (ch >= '\u05D0' && ch <= '\u05EA') n++; }
@@ -192,6 +233,7 @@ final class Agent {
     // ================================================================ main loop
 
     void send(String userText) throws Exception {
+        closeDangling();
         int mark = contents.length();
         try {
             JSONObject um = msg("user", userText);
@@ -404,7 +446,19 @@ final class Agent {
         }
         ui.status(purpose);
         actions++;
-        Shell.Result r = Shell.run(cmd, root, Math.max(5, Math.min(300, args.optInt("timeout_sec", 40))));
+        int tmo = Math.max(5, Math.min(300, args.optInt("timeout_sec", 40)));
+        if (isReboot(cmd)) {   // the process dies with the phone: write down now that a reboot was started
+            Core.prefs().edit().putLong("reboot_at", System.currentTimeMillis()).putString("reboot_chat", String.valueOf(Core.curId)).apply();
+            ui.stepDone(st, true, "הטלפון מופעל מחדש…", null);
+            Core.saveChat();
+        }
+        Shell.Result r = Shell.run(cmd, root, tmo);
+        if (!root && rootOk && r.exit != 0 && needsRoot(r.out)) {   // forgot root=true: run it again with root instead of failing
+            Shell.Result r2 = Shell.run(cmd, true, tmo);
+            r2.out = "[ran again with root because it needed privileges]\n" + r2.out;
+            r = r2;
+            root = true;
+        }
         out.put("exit_code", r.exit);
         out.put("output", r.out);
         ui.stepDone(st, r.exit == 0, r.out, null);
@@ -1251,7 +1305,11 @@ final class Agent {
             + "KNOW WHAT IS NORMAL ON ANDROID (do not report these as problems): /system, /vendor, /product, /apex and other read-only partitions are ALWAYS ~100% full by design; only /data free space matters. "
             + "Load average on Android is usually 5-30 because it counts waiting threads: never judge CPU by it, use CPU % from top. Swap/zram being half used is normal memory management, not a problem by itself. "
             + "Thresholds must match their labels exactly (10.8% free is attention, not problem). An app's ANRs matter only if the user sees them or they are many and recent; say how recent. "
-            + "Uptime of a week is not a problem unless there are symptoms.\n"
+            + "Uptime of a week is not a problem unless there are symptoms. 'Free RAM' near zero is normal on Linux: judge memory by MemAvailable and by low-memory kills. "
+            + "Force-stopping apps does not free memory for long (they restart); never do it as a fix. "
+            + "WebView: the provider may be com.android.webview, com.google.android.webview or another package; the quick scan names the active one.\n"
+            + "REPORT ACTIONS EXACTLY: describe what a command really does (pm trim-caches frees cache of ALL apps only when space is needed; it does not 'clear the cache of app X'). Never claim an effect you did not measure.\n"
+            + "FIRST ANSWER TO A 'WHY' QUESTION CHANGES NOTHING: investigate, explain, and offer options; make changes only after the user picks one (even in autonomous mode for anything beyond a read-only check).\n"
             + "ROOT MANAGER: never change Magisk/KernelSU/APatch settings, the superuser list, or any security setting that grants Phone Doctor more power, and never offer to. "
             + "If the user turned root off for Phone Doctor, respect it and work without root.\n"
             + "HOW TO ANSWER A 'WHY / WHAT HAPPENED' QUESTION (diagnosis). Work in two parts:\n"
