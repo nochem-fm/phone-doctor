@@ -90,6 +90,21 @@ final class Agent {
     private final List<JSONObject> attach = new ArrayList<JSONObject>();
     private String lastModel = "";
     private int questionsThisTurn;
+    private int emptyRetries;
+
+    /** Why a 200 response had no content (finishReason / promptFeedback). */
+    private static String emptyReason(JSONObject resp) {
+        JSONObject pf = resp.optJSONObject("promptFeedback");
+        if (pf != null && pf.has("blockReason")) return "PROMPT_BLOCKED " + pf.optString("blockReason");
+        JSONArray c = resp.optJSONArray("candidates");
+        if (c == null || c.length() == 0) return "no candidates: " + cutStatic(resp.toString(), 400);
+        JSONObject c0 = c.optJSONObject(0);
+        String fr = c0 == null ? "" : c0.optString("finishReason", "");
+        String fm = c0 == null ? "" : c0.optString("finishMessage", "");
+        return "finishReason=" + fr + (fm.isEmpty() ? "" : " " + cutStatic(fm, 300));
+    }
+
+    private static String cutStatic(String s, int n) { return s.length() <= n ? s : s.substring(0, n) + "…"; }
 
     String lastModelName() { return lastModel; }
 
@@ -189,6 +204,7 @@ final class Agent {
             attach.clear();
             contents.put(um);
             int toolsUsed = 0;
+            emptyRetries = 0;
             questionsThisTurn = 0;
             boolean nudged = false;
             for (int i = 0; i < 60; i++) {
@@ -199,7 +215,22 @@ final class Agent {
                 JSONArray cands = resp.optJSONArray("candidates");
                 JSONObject content = (cands != null && cands.length() > 0) ? cands.getJSONObject(0).optJSONObject("content") : null;
                 JSONArray parts = content == null ? null : content.optJSONArray("parts");
-                if (parts == null) throw new Exception("Gemini לא החזיר תשובה (חסימת בטיחות או הגבלת קצב).");
+                if (parts == null || parts.length() == 0) {
+                    // HTTP 200 but no answer: a broken tool call, a safety/recitation stop, or an empty reply (common with lite models
+                    // after big tool outputs). Log it, retry, then move to another model, instead of failing the whole request.
+                    String why = emptyReason(resp);
+                    ErrorLog.add("empty", lastModel, 200, why);
+                    if (why.startsWith("PROMPT_BLOCKED")) throw new Exception("Gemini חסם את הבקשה (" + why + "). נסח את השאלה אחרת או פתח שיחה חדשה.");
+                    if (++emptyRetries <= 3) {
+                        if (emptyRetries >= 2 && !lastModel.isEmpty() && hasOtherModel(lastModel)) {
+                            COOL.put(lastModel, System.currentTimeMillis() + 5 * 60000L);   // try the next model
+                            ui.status("המודל " + lastModel + " החזיר תשובה ריקה, עובר למודל אחר…");
+                        } else ui.status("Gemini החזיר תשובה ריקה, מנסה שוב…");
+                        if (why.contains("MALFORMED_FUNCTION_CALL")) compactHard();
+                        continue;
+                    }
+                    throw new Exception("Gemini החזיר תשובה ריקה כמה פעמים (" + why + "). נסה שוב, או פתח שיחה חדשה אם זה חוזר.");
+                }
                 contents.put(content);
 
                 StringBuilder text = new StringBuilder();
