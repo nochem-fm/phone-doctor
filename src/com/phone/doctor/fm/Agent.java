@@ -484,7 +484,7 @@ final class Agent {
         ui.status("אוסף נתוני מערכת (" + focus + ")");
         actions++;
         String top = "(top -b -n 1 -m 12 2>/dev/null || top -n 1 2>/dev/null) | head -25";
-        String dev = "echo '== DEVICE'; getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.fingerprint; uptime\n";
+        String dev = "echo '== DEVICE'; getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.fingerprint; echo \"uptime_hours=$(( $(cut -d. -f1 /proc/uptime) / 3600 ))\"\n";   // no load average: it misleads on Android
         String bat = "echo '== BATTERY'; dumpsys battery 2>&1 | head -20; for f in capacity temp health status; do echo $f=$(cat /sys/class/power_supply/battery/$f 2>/dev/null); done\n";
         String mem = "echo '== MEMORY'; head -6 /proc/meminfo\n";
         String sto = "echo '== STORAGE'; df -h /data /sdcard 2>&1 | head -6\n";
@@ -1231,6 +1231,7 @@ final class Agent {
             + "If the user says your conclusion is unrelated, drop it and investigate the period they describe; never repeat a rejected conclusion.\n"
             + "PART 2, options instead of deciding alone: after the findings, offer 2-4 next steps (deeper checks you can run, or fixes), each with what it would show or fix and its risk, "
             + "and give them to the user with ask_user (the answer text you write together with the ask_user call is shown to the user as your answer). "
+            + "If you end a final answer with choices instead, put each choice alone on the LAST lines as [short choice text]: the app turns those lines into buttons. "
             + "Run read-only checks yourself without asking; ask before longer investigations and before ANY change. After the choice, do it and report in the same structure.\n"
             + "PLAYBOOKS (follow them):\n"
             + "- the user names a time ('אתמול בערב', 'לפני שעה', 'מאז יום ראשון'): investigate timeline for that window (convert to dates; today is " + new java.text.SimpleDateFormat("yyyy-MM-dd EEEE HH:mm", java.util.Locale.US).format(new java.util.Date()) + ").\n"

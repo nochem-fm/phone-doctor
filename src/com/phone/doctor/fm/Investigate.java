@@ -276,7 +276,7 @@ final class Investigate {
     // ---------------------------------------------------------------- 6. slowness and heat
 
     private static String performance(String pkg, boolean root) {
-        String s = "echo '== CPU LOAD'; cat /proc/loadavg; (top -b -n 1 -m 10 2>/dev/null || top -n 1 2>/dev/null) | head -16\n"
+        String s = "echo '== CPU USE (per process, % of all cores)'; (top -b -n 1 -m 10 2>/dev/null || top -n 1 2>/dev/null) | head -16\n"
             + "echo '== CPU SPEED NOW / MAX (throttling)'; for c in /sys/devices/system/cpu/cpu[0-9]*; do echo \"$(basename $c) $(cat $c/cpufreq/scaling_cur_freq 2>/dev/null)/$(cat $c/cpufreq/cpuinfo_max_freq 2>/dev/null)\"; done 2>/dev/null | head -10\n"
             + "echo '== THERMAL'; dumpsys thermalservice 2>/dev/null | grep -E -i 'Thermal Status|Temperature\\{|mValue|throttl' | head -20\n"
             + "echo '== MEMORY PRESSURE'; cat /proc/pressure/memory 2>/dev/null; cat /proc/pressure/cpu 2>/dev/null; grep -E 'MemAvailable|SwapFree|SwapTotal' /proc/meminfo\n"

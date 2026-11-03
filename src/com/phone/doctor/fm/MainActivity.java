@@ -1415,9 +1415,38 @@ public class MainActivity extends Activity {
         scrollDown();
     }
 
+    /** Options the model wrote as text ("[לפנות שטח]" lines) at the end of an answer: shown as buttons instead. */
+    static final java.util.regex.Pattern OPT = java.util.regex.Pattern.compile("^\\s*(?:[•*\\-]|\\d+[.)])?\\s*\\[([^\\[\\]]{2,60})\\]\\s*$");
+
+    static List<String> trailingOptions(String text) {
+        String[] lines = text.split("\n");
+        List<String> opts = new ArrayList<String>();
+        int i = lines.length - 1;
+        while (i >= 0 && lines[i].trim().isEmpty()) i--;
+        for (; i >= 0; i--) {
+            java.util.regex.Matcher m = OPT.matcher(lines[i]);
+            if (!m.find()) break;
+            opts.add(0, m.group(1).trim());
+        }
+        return opts.size() >= 2 && opts.size() <= 6 ? opts : new ArrayList<String>();
+    }
+
     void renderAI(String text, boolean err) {
         TextView spark = tv("\u2726", 18, TXT);
         grad(spark);
+        final List<String> opts = err ? new ArrayList<String>() : trailingOptions(text);
+        if (!opts.isEmpty()) {   // cut the option lines out of the text; they become buttons below
+            String[] lines = text.split("\n");
+            int keep = lines.length;
+            int found = 0;
+            for (int i = lines.length - 1; i >= 0 && found < opts.size(); i--) {
+                if (lines[i].trim().isEmpty()) { keep = i; continue; }
+                if (OPT.matcher(lines[i]).find()) { keep = i; found++; }
+            }
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < keep; i++) b.append(lines[i]).append('\n');
+            text = b.toString().trim();
+        }
         TextView t = tv("", 16, err ? ERR : TXT);
         t.setText(err ? text : Md.render(text, SURF2));
         t.setLineSpacing(dp(3), 1f);
@@ -1425,6 +1454,26 @@ public class MainActivity extends Activity {
         t.setPadding(0, dp(4), 0, dp(12));
         chat.addView(spark);
         chat.addView(t);
+        if (!opts.isEmpty()) {
+            LinearLayout box = vert();
+            box.setPadding(0, 0, 0, dp(10));
+            for (final String o : opts) {
+                TextView bt = tv(o, 14, ACC);
+                bt.setBackground(rr(SURF2, 18));
+                bt.setPadding(dp(14), dp(9), dp(14), dp(9));
+                click(bt, new Runnable() {
+                    public void run() {
+                        if (Core.running) { toast("הסוכן עדיין עובד"); return; }
+                        hideIme();
+                        onSend(o);
+                    }
+                });
+                LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(W, W);
+                bl.bottomMargin = dp(6);
+                box.addView(bt, bl);
+            }
+            chat.addView(box);
+        }
         if (err) {
             TextView det = tv("פרטים טכניים (להעתקה)", 12, DIM);
             det.setPaintFlags(det.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
