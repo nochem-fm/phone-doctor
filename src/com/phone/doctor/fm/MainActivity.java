@@ -1869,7 +1869,12 @@ public class MainActivity extends Activity {
                     String state = x.optString("state");
                     sb.append(state.equals("ok") ? "  [v] " : state.equals("fail") ? "  [x] " : "  [ ] ").append(x.optString("title")).append('\n');
                     String d = x.optString("detail");
-                    if (x.optString("type").equals("cmd") && !d.isEmpty()) sb.append("      ").append(d.length() > 300 ? d.substring(0, 300) + "…" : d).append('\n');
+                    if (!d.isEmpty() && !x.optString("type").equals("shot")) sb.append("      $ ").append(d.length() > 600 ? d.substring(0, 600) + "…" : d.replace("\n", "\n        ")).append('\n');
+                    String o = x.optString("out");   // the tool's output (logs), already capped at 3000 chars per step
+                    if (!o.isEmpty()) {
+                        sb.append("      --- פלט ---\n");
+                        for (String ln : o.split("\n")) sb.append("      | ").append(ln).append('\n');
+                    }
                     if (x.has("jid")) {
                         JSONObject j2 = Journal.get(x.optLong("jid"));
                         if (j2 != null) sb.append("      ").append(j2.optString("state").equals("undone") ? "(בוטל)" : Journal.canUndo(j2) ? "(ניתן לביטול)" : "(בלתי הפיך)").append('\n');
@@ -1877,7 +1882,9 @@ public class MainActivity extends Activity {
                 }
             }
         }
-        return sb.toString().trim();
+        if (ErrorLog.count() > 0) sb.append("\n━━━━━━━━━━\nיומן שגיאות Gemini (אחרונות):\n").append(ErrorLog.text(8));
+        String r = sb.toString().trim();
+        return r.length() > 400000 ? r.substring(0, 400000) + "\n…[הדוח קוצר]" : r;   // share intents have a size limit
     }
 
     void shareReport() {
