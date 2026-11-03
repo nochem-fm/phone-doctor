@@ -141,6 +141,11 @@ final class Shell {
             }
         }
 
+        /** Closes the shell and forgets a failure, so the next root command asks the root manager again. */
+        static void reset() {
+            synchronized (LOCK) { close(); broken = false; }
+        }
+
         static void close() {
             try { if (proc != null) proc.destroy(); } catch (Exception ignored) { }
             proc = null;

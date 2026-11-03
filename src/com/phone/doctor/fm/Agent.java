@@ -89,6 +89,7 @@ final class Agent {
     private final List<JSONObject> images = new ArrayList<JSONObject>();
     private final List<JSONObject> attach = new ArrayList<JSONObject>();
     private String lastModel = "";
+    private int questionsThisTurn;
 
     String lastModelName() { return lastModel; }
 
@@ -96,6 +97,41 @@ final class Agent {
         this.ctx = ctx;
         this.ui = ui;
         this.rootOk = rootOk;
+    }
+
+    private static int hebrew(String p) {
+        int n = 0;
+        for (int i = 0; i < p.length(); i++) { char ch = p.charAt(i); if (ch >= '\u05D0' && ch <= '\u05EA') n++; }
+        return n;
+    }
+
+    /**
+     * Drops paragraphs the model wrote to itself in English ("Seems like the user closed the question..."):
+     * a paragraph with letters but no Hebrew, in an answer that also has Hebrew paragraphs. Code, commands
+     * and package names inside Hebrew paragraphs are kept.
+     */
+    static String userFacing(String t) {
+        if (t == null || hebrew(t) < 20) return t == null ? "" : t;
+        StringBuilder sb = new StringBuilder();
+        for (String para : t.split("\n\\s*\n")) {
+            String x = para.trim();
+            int letters = 0;
+            for (int i = 0; i < x.length(); i++) if (Character.isLetter(x.charAt(i))) letters++;
+            boolean english = hebrew(x) == 0 && letters > 40 && !x.startsWith("```") && !x.startsWith("`") && !x.startsWith("$");
+            if (english) continue;
+            // an English lead-in glued to Hebrew in the same paragraph ("...question.שמתי לב"): cut up to the first Hebrew letter
+            int firstHeb = -1;
+            for (int i = 0; i < x.length(); i++) { char ch = x.charAt(i); if (ch >= '\u05D0' && ch <= '\u05EA') { firstHeb = i; break; } }
+            if (firstHeb > 40 && hebrew(x.substring(0, firstHeb)) == 0) {
+                String head = x.substring(0, firstHeb);
+                int letters2 = 0;
+                for (int i = 0; i < head.length(); i++) if (Character.isLetter(head.charAt(i))) letters2++;
+                if (letters2 > 30 && !head.contains("`") && head.trim().matches(".*[.!?:]$")) x = x.substring(firstHeb);
+            }
+            if (sb.length() > 0) sb.append("\n\n");
+            sb.append(x);
+        }
+        return sb.toString().trim();
     }
 
     private static boolean endsWithQuestion(String t) {
@@ -153,6 +189,7 @@ final class Agent {
             attach.clear();
             contents.put(um);
             int toolsUsed = 0;
+            questionsThisTurn = 0;
             boolean nudged = false;
             for (int i = 0; i < 60; i++) {
                 if (stop) { repair(); ui.reply("עצרתי לפי בקשתך."); return; }
@@ -186,16 +223,17 @@ final class Agent {
                             + "Ask the user only if a tool truly cannot tell, and then with ask_user buttons."));
                         continue;
                     }
-                    ui.reply(t.isEmpty() ? "(אין תשובה)" : t);
+                    String shownT = userFacing(t);
+                    ui.reply(shownT.isEmpty() ? (t.isEmpty() ? "(אין תשובה)" : t) : shownT);
                     return;
                 }
                 toolsUsed += calls.size();
                 String think = text.toString().trim();
                 boolean asks = false;
                 for (JSONObject c : calls) if ("ask_user".equals(c.optString("name"))) asks = true;
-                if (asks && think.length() > 150) {   // the diagnosis comes with the options: show it as an answer
-                    ui.reply(think);
-                    think = "";
+                if (asks) {   // the diagnosis comes with the options: show its Hebrew part as an answer, never the model's English notes
+                    String shown = userFacing(think);
+                    if (shown.length() > 150) { ui.reply(shown); think = ""; }
                 }
                 if (!think.isEmpty()) {
                     String first = think.split("\n")[0];
@@ -883,11 +921,16 @@ final class Agent {
         List<String> clean = new ArrayList<String>();
         for (String o : opts) if (!o.trim().isEmpty()) clean.add(o.trim());
         if (clean.size() < 2 || clean.size() > 5) { out.put("error", "give 2-5 options separated by |"); return; }
+        if (++questionsThisTurn > 2) {
+            out.put("error", "Do not ask more questions in this request. Give the final answer now with what you have, and list the options in text.");
+            return;
+        }
         int st = ui.step("think", "שאלה אליך: " + qn, "");
         ui.status("ממתין לבחירה שלך…");
         String ans = ui.choose(qn, clean.toArray(new String[0]));
         if (stop) throw new Stopped();
-        out.put("answer", ans == null ? "NO ANSWER (the user closed the question)" : ans);
+        out.put("answer", ans == null ? "DISMISSED: the user closed the question without choosing. Treat it as NO / not now. Do NOT ask it again or rephrase it, "
+            + "do not ask another question now; give a short final answer (what was found, the options in one line) and stop." : ans);
         ui.stepDone(st, ans != null, ans == null ? "לא נבחרה תשובה" : "בחרת: " + ans, null);
     }
 
@@ -1174,6 +1217,12 @@ final class Agent {
             + "GOAL: the user describes a problem (an app that does not work, a permission that does not take effect, battery, lag, network...). Find the root cause and fix it yourself, end to end, without asking the user for things you can find out or do alone.\n"
             + "ANSWER QUALITY (most important): answer exactly what the user asked, fully and in detail. Investigate with your tools BEFORE answering; never answer a request from the quick scan alone, "
             + "never reply with only a question, and never repeat a question the user already refused to answer: find it out yourself.\n"
+            + "KNOW WHAT IS NORMAL ON ANDROID (do not report these as problems): /system, /vendor, /product, /apex and other read-only partitions are ALWAYS ~100% full by design; only /data free space matters. "
+            + "Load average on Android is usually 5-30 because it counts waiting threads: never judge CPU by it, use CPU % from top. Swap/zram being half used is normal memory management, not a problem by itself. "
+            + "Thresholds must match their labels exactly (10.8% free is attention, not problem). An app's ANRs matter only if the user sees them or they are many and recent; say how recent. "
+            + "Uptime of a week is not a problem unless there are symptoms.\n"
+            + "ROOT MANAGER: never change Magisk/KernelSU/APatch settings, the superuser list, or any security setting that grants Phone Doctor more power, and never offer to. "
+            + "If the user turned root off for Phone Doctor, respect it and work without root.\n"
             + "HOW TO ANSWER A 'WHY / WHAT HAPPENED' QUESTION (diagnosis). Work in two parts:\n"
             + "PART 1, investigate before you conclude: note the exact symptom and WHEN it happened (e.g. 'a few days ago'). In ONE response call every relevant source for that symptom and period "
             + "(logs, crash/boot history, app reports), not just one grep. Then correlate by TIME and MECHANISM with the symptom. Do not settle on the first thing you see.\n"

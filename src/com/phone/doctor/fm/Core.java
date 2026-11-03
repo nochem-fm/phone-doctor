@@ -175,6 +175,11 @@ final class Core {
         new Thread(new Runnable() {
             public void run() {
                 Exception err = null;
+                if (a.rootOk) {   // re-ask the root manager once per request: if the user revoked root, stop using it
+                    Shell.RootShell.reset();
+                    boolean ok = Shell.run("id", true, 25).out.contains("uid=0");
+                    if (!ok) { a.rootOk = false; prefs().edit().putBoolean("root", false).apply(); }
+                }
                 try { a.send(msg); } catch (Exception e) { err = e; }
                 final Exception fe = err;
                 H.post(new Runnable() { public void run() { finish(a, fe); } });
