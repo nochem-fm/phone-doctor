@@ -168,6 +168,21 @@ final class Agent {
      */
     static String userFacing(String t) {
         if (t == null || hebrew(t) < 20) return t == null ? "" : t;
+        t = t.trim();
+        int fh = -1;
+        for (int i = 0; i < t.length(); i++) { char ch = t.charAt(i); if (ch >= '\u05D0' && ch <= '\u05EA') { fh = i; break; } }
+        if (fh > 0) {   // "Looking at the results:\n\nGiven ..., I will ....ההסבר": the model talking to itself before the answer
+            String head = t.substring(0, fh);
+            int letters = 0;
+            for (int i = 0; i < head.length(); i++) if (Character.isLetter(head.charAt(i))) letters++;
+            String ht = head.trim();
+            boolean sentence = ht.matches("(?s).*[.!?:]$") || head.endsWith("\n");
+            if (letters > 15 && sentence && !head.contains("`") && !head.contains("**") && !ht.startsWith("#")) t = t.substring(fh);
+            else if (letters > 15 && !head.contains("`")) {   // keep a heading/name, cut whole English sentences/paragraphs before it
+                int cut = Math.max(head.lastIndexOf("\n"), Math.max(head.lastIndexOf(". "), head.lastIndexOf(": ")));
+                if (cut > 15) t = t.substring(cut + 1).trim();
+            }
+        }
         StringBuilder sb = new StringBuilder();
         for (String para : t.split("\n\\s*\n")) {
             String x = para.trim();
@@ -459,6 +474,7 @@ final class Agent {
             r = r2;
             root = true;
         }
+        r.out = decodeAbx(cmd, r.out, root);
         out.put("exit_code", r.exit);
         out.put("output", r.out);
         ui.stepDone(st, r.exit == 0, r.out, null);
@@ -712,6 +728,28 @@ final class Agent {
         }
     }
 
+    private static final java.util.regex.Pattern CAT_FILE = java.util.regex.Pattern.compile("\\bcat\\s+('[^']+'|\"[^\"]+\"|[^\\s;|&<>]+)");
+
+    /** Android 12+ keeps many system XML files as Android Binary XML ("ABX"): normal, not corrupted. Show them decoded. */
+    static String decodeAbx(String cmd, String out, boolean root) {
+        int i = out.indexOf("ABX");
+        if (i < 0 || i > 2000 || android.os.Build.VERSION.SDK_INT < 31) return out;
+        StringBuilder add = new StringBuilder();
+        java.util.regex.Matcher m = CAT_FILE.matcher(cmd);
+        int n = 0;
+        while (m.find() && n < 3) {
+            String f = m.group(1);
+            String q = f.startsWith("'") || f.startsWith("\"") ? f : "'" + f + "'";
+            Shell.Result d = Shell.run("abx2xml " + q + " - 2>&1", root, 20);
+            if (d.exit == 0 && d.out.contains("<")) { add.append("\n[decoded ").append(f).append(" with abx2xml]\n").append(d.out); n++; }
+        }
+        String head = "[NOTE BY THE APP: text starting with 'ABX' is Android Binary XML, the normal storage format of system XML files since Android 12. "
+            + "It is NOT corrupted. Read such files with: abx2xml <file> -]\n";
+        if (n == 0) return head + out;
+        // the binary noise is useless to the model: replace it with the decoded XML
+        return Shell.clip(head + out.substring(0, i) + "(binary ABX shown decoded below)" + add);
+    }
+
     private void readScreen(JSONObject args, JSONObject out) throws Exception {
         int st = ui.step("screen", args.optString("purpose", "קורא את המסך"), "read_screen");
         ui.status("קורא את המסך");
@@ -728,6 +766,7 @@ final class Agent {
 
     private void screenAction(JSONObject a, JSONObject out) throws Exception {
         String act = a.getString("action");
+        if (act.equals("read_screen") || act.equals("read") || act.equals("dump")) { readScreen(a, out); return; }   // a common mix-up of two tools
         String purpose = a.optString("purpose", act);
         int x = a.optInt("x"), y = a.optInt("y"), x2 = a.optInt("x2"), y2 = a.optInt("y2");
         String text = a.optString("text", "");
@@ -1310,6 +1349,20 @@ final class Agent {
             + "WebView: the provider may be com.android.webview, com.google.android.webview or another package; the quick scan names the active one.\n"
             + "REPORT ACTIONS EXACTLY: describe what a command really does (pm trim-caches frees cache of ALL apps only when space is needed; it does not 'clear the cache of app X'). Never claim an effect you did not measure.\n"
             + "FIRST ANSWER TO A 'WHY' QUESTION CHANGES NOTHING: investigate, explain, and offer options; make changes only after the user picks one (even in autonomous mode for anything beyond a read-only check).\n"
+            + "EVIDENCE, NOT BACKGROUND NOISE: a cause must be tied to THIS symptom by evidence (a log line naming the component, a timestamp matching when it started, a state that explains it). "
+            + "Generic findings (storage 90-95% full with GBs free, uptime, unrelated app crashes, an old security patch) are NOT a cause; mention one only if it is extreme (under ~500 MB free, or ENOSPC/'No space left' in the logs). "
+            + "Never write 'high confidence' without naming the evidence. If nothing ties to the symptom, say you have not found the cause yet and what you will check next.\n"
+            + "WHEN THE USER REJECTS AN EXPLANATION ('that is not it', 'no connection'), drop it completely: do not repeat it, do not keep recommending it. Look for other evidence.\n"
+            + "WHEN THE USER SAYS IT WORKS NOW, believe what they see. Verify with the right signal and report what changed; do not argue from an ambiguous reading.\n"
+            + "READ DUMPSYS BY SECTION: many dumpsys outputs repeat the same field in several sections (dumpsys wallpaper has System, Lock and Fallback sections; the Fallback connection having mService=null is NORMAL). "
+            + "A bare grep loses which section a line came from: grep with the section headers too (e.g. grep -E 'wallpaper state|connection|mService|mEngine'), or read the whole section.\n"
+            + "ABX FILES: since Android 12 many system XML files (/data/system/..., wallpaper_info.xml, packages.xml, settings) are Android Binary XML and start with 'ABX'. That is normal, NOT corruption. "
+            + "Read them with: abx2xml <file> -  (root). Never call a file corrupted only because it is binary.\n"
+            + "NEVER INVENT NAMES: package, component, service and activity names must come from the device (pm list packages, dumpsys package <pkg>, cmd package query-services). "
+            + "'Not found' / 'Unknown component' means your guess was wrong: look the real name up, do not report it as a fault of the phone. Do not attribute to the user things they did not say.\n"
+            + "THE PURPOSE MUST MATCH THE COMMAND: the purpose you give for a command, and any option you offer, must describe everything it does, plainly. "
+            + "If it clears an app's data (pm clear), deletes files, uninstalls, disables or force-stops something, say so by name. Never propose 'X, it does not delete anything' and then run something that deletes. "
+            + "If the user said not to delete, do not run pm clear / rm at all until they explicitly agree to that exact deletion.\n"
             + "ROOT MANAGER: never change Magisk/KernelSU/APatch settings, the superuser list, or any security setting that grants Phone Doctor more power, and never offer to. "
             + "If the user turned root off for Phone Doctor, respect it and work without root.\n"
             + "HOW TO ANSWER A 'WHY / WHAT HAPPENED' QUESTION (diagnosis). Work in two parts:\n"

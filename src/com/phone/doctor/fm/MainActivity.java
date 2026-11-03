@@ -2060,7 +2060,8 @@ public class MainActivity extends Activity {
             return;
         }
         String rl = p.risk.equals("dangerous") ? "\u26A0 פעולה מסוכנת" : "שינוי במערכת";
-        String msg = p.purpose + "\n\n" + rl + (p.root ? " \u00B7 root" : "") + "\n\n" + p.cmd;
+        String warn = Safety.warnings(p.cmd);   // what the command really does, independent of the model's description
+        String msg = (warn.isEmpty() ? "" : "מה הפקודה עושה בפועל:\n" + warn + "\n\n") + p.purpose + "\n\n" + rl + (p.root ? " \u00B7 root" : "") + "\n\n" + p.cmd;
         pendingDlg = new AlertDialog.Builder(this, dlg()).setTitle("נדרש אישור").setMessage(msg).setCancelable(false)
             .setPositiveButton("אשר והרץ", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int w) {

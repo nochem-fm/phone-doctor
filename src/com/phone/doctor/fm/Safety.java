@@ -26,6 +26,26 @@ final class Safety {
         return SENSITIVE.matcher(cmd).find();
     }
 
+    /** Plain-Hebrew list of the destructive parts of a command, shown in the approval popup no matter how the model described it. */
+    static String warnings(String cmd) {
+        StringBuilder sb = new StringBuilder();
+        String u = cmd;
+        java.util.regex.Matcher m;
+        m = Pattern.compile("\\bpm\\s+clear\\s+(?:--user\\s+\\S+\\s+)?([^\\s;|&)]+)").matcher(u);
+        while (m.find()) sb.append("\u26A0 מוחק את כל הנתונים של ").append(m.group(1)).append(" (הגדרות, חשבונות, קבצים). אי אפשר לבטל.\n");
+        m = Pattern.compile("\\b(?:pm|cmd\\s+package)\\s+uninstall\\s+(?:-k\\s+|--user\\s+\\S+\\s+)*([^\\s;|&)]+)").matcher(u);
+        while (m.find()) sb.append("\u26A0 מסיר את האפליקציה ").append(m.group(1)).append(".\n");
+        m = Pattern.compile("\\bpm\\s+(disable|disable-user|hide|suspend)\\s+(?:--user\\s+\\S+\\s+)?([^\\s;|&)]+)").matcher(u);
+        while (m.find()) sb.append("משבית את ").append(m.group(2)).append(".\n");
+        m = Pattern.compile("\\brm\\s+(?:-\\S+\\s+)*([^;|&\\n]+)").matcher(u);
+        while (m.find()) sb.append("\u26A0 מוחק קבצים: ").append(m.group(1).trim()).append("\n");
+        m = Pattern.compile("\\bam\\s+force-stop\\s+(?:--user\\s+\\S+\\s+)?([^\\s;|&)]+)").matcher(u);
+        while (m.find()) sb.append("עוצר בכפייה את ").append(m.group(1)).append(m.group(1).equals("com.android.systemui") ? " (שורת המצב והרקע ייעלמו לרגע)" : "").append(".\n");
+        if (Pattern.compile("\\breboot\\b|svc\\s+power\\s+reboot|sys\\.powerctl").matcher(u).find()) sb.append("מפעיל מחדש את הטלפון.\n");
+        if (Pattern.compile("\\bkill(all)?\\b").matcher(u).find()) sb.append("סוגר תהליכים בכוח.\n");
+        return sb.toString().trim();
+    }
+
     static boolean blocked(String cmd) {
         return BLOCK.matcher(cmd).find();
     }
@@ -34,7 +54,8 @@ final class Safety {
         "getprop", "cat", "ls", "df", "du", "ps", "uname", "uptime", "free", "id", "stat", "grep", "egrep",
         "head", "tail", "wc", "sort", "uniq", "cut", "netstat", "ss", "getenforce", "lsmod", "dmesg",
         "readlink", "which", "whoami", "echo", "printf", "test", "lsof", "nproc", "vmstat", "pidof", "tr",
-        "basename", "dirname", "true", "sleep", "ls", "stat", "md5sum", "sha1sum", "sha256sum"));
+        "basename", "dirname", "true", "sleep", "ls", "stat", "md5sum", "sha1sum", "sha256sum",
+        "pgrep", "xxd", "od", "hexdump", "strings", "file", "getconf", "cmp", "diff", "printenv", "zcat", "nl", "fold", "rev"));
 
     static final Set<String> MUTATING_WORDS = new HashSet<String>(Arrays.asList(
         "set", "reset", "unplug", "suspend", "whitelist", "force-idle", "enable", "disable", "step",
@@ -149,6 +170,7 @@ final class Safety {
             case "ifconfig": return t.length == 1 || (t.length == 2 && !anyMutating(t));
             case "date": return t.length == 1 || a1.startsWith("+");
             case "sort": return !seg.contains(" -o");
+            case "abx2xml": return t.length == 3 && t[2].equals("-");                 // to stdout only (otherwise it writes a file)
             default: return RO.contains(c);
         }
     }
