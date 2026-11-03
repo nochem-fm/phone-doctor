@@ -117,6 +117,9 @@ public class MainActivity extends Activity {
         rootOk = prefs.getBoolean("root", false);
         for (String x : prefs.getString("skipped", "").split(",")) if (!x.isEmpty()) skipped.add(x);
         applyTheme();
+        // RTL paragraphs whenever the text has Hebrew, even if it starts with an English word (Gemini, root, API...)
+        getWindow().getDecorView().setTextDirection(View.TEXT_DIRECTION_ANY_RTL);
+        if (b == null) freshStart();   // opening the app starts on the main screen, not inside the last chat
         if (!termsOk()) showTerms(false);
         else if (prefs.getBoolean("setup", false)) showChat();
         else showSetup(true);
@@ -127,13 +130,16 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         Core.ui = this;
-        if (needRefresh && screen.equals("chat")) showChat();
+        if (stoppedAt > 0 && System.currentTimeMillis() - stoppedAt > 10 * 60000L && screen.equals("chat") && freshStart()) showChat();
+        else if (needRefresh && screen.equals("chat")) showChat();
+        stoppedAt = 0;
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         needRefresh = true;
+        stoppedAt = System.currentTimeMillis();
         if (pendingDlg != null) {
             pendingDlg.dismiss();
             pendingDlg = null;
@@ -147,6 +153,20 @@ public class MainActivity extends Activity {
         super.onNewIntent(i);
         setIntent(i);
         handleIntent(i);
+    }
+
+    long stoppedAt;
+
+    /** Saves the open chat and clears the screen to a new one, unless the agent is still working on it. */
+    boolean freshStart() {
+        if (Core.running || Core.pending != null || Core.uiLog.length() == 0) return false;
+        Core.saveChat();
+        Core.agent = null;
+        Core.curId = null;
+        Core.uiLog = new JSONArray();
+        Core.steps = new JSONArray();
+        expandLive = false;
+        return true;
     }
 
     void addTile() {
@@ -237,6 +257,8 @@ public class MainActivity extends Activity {
     }
 
     int dlg() {
+        int own = getResources().getIdentifier(light ? "DlgLight" : "DlgDark", "style", getPackageName());
+        if (own != 0) return own;
         if (Build.VERSION.SDK_INT < 21) return light ? AlertDialog.THEME_HOLO_LIGHT : AlertDialog.THEME_HOLO_DARK;
         return light ? android.R.style.Theme_Material_Light_Dialog_Alert : android.R.style.Theme_Material_Dialog_Alert;
     }
@@ -464,7 +486,7 @@ public class MainActivity extends Activity {
             {"הבינה המלאכותית יכולה לטעות", "Gemini עלול לטעות, להציע או לבצע פעולה שגויה או מזיקה, ולא להבין את המצב. אל תאשר פעולה שאינך מבין. במצב אוטונומי הסוכן מבצע שינויים רגילים בלי לשאול על כל שלב."},
             {"פרטיות ומידע רגיש", "פלט פקודות, טקסט המסך וצילומי מסך נשלחים לשרתי Google (Gemini) לניתוח ועלולים לכלול מידע אישי: הודעות, סיסמאות, פרטי תשלום ועוד. אל תפעיל את האפליקציה כשמידע רגיש מוצג על המסך. מפתח ה-API נשמר במכשיר ללא הצפנה."},
             {"הרשאות רחבות", "root, שירות הנגישות ומנהל המכשיר נותנים שליטה רחבה על המכשיר. הפעל אותם רק אם אתה מבין מה הם עושים. אפשר לבטל אותם בכל עת בהגדרות המערכת."},
-            {"לפני שמתחילים", "מומלץ לגבות את המכשיר לפני שימוש. השתמש רק במכשיר שלך או באישור מפורש של בעליו. האחריות לעמידה בחוק ובתנאי השימוש של Google ושל יצרן המכשיר היא עליך."}};
+            {"השתמש בזהירות", "קרא כל בקשת אישור לפני שאתה לוחץ. אל תאשר פעולה בלי לחשוב ובלי להבין מה היא עושה, ואם יש ספק עדיף לדחות ולשאול. מומלץ לגבות את המכשיר לפני שימוש, ולהשתמש רק במכשיר שלך או באישור מפורש של בעליו."}};
         ScrollView sv = new ScrollView(this);
         LinearLayout list = vert();
         sv.addView(list);
@@ -485,10 +507,6 @@ public class MainActivity extends Activity {
             l.bottomMargin = dp(8);
             list.addView(c, l);
         }
-        TextView fine = tv("נוסח כללי, אינו מהווה ייעוץ משפטי.", 11, DIM);
-        fine.setGravity(Gravity.CENTER);
-        fine.setPadding(0, dp(4), 0, dp(8));
-        list.addView(fine);
         col.addView(sv, lp(M, 0, 1f));
 
         if (readOnly) {

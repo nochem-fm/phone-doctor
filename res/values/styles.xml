@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Holo.NoActionBar" />
+    <!-- anyRtl: a paragraph with any Hebrew is right-to-left, even when its first word is English -->
+    <style name="AppTheme" parent="@android:style/Theme.Holo.NoActionBar">
+        <item name="android:textDirection">anyRtl</item>
+    </style>
+    <style name="DlgDark" parent="@android:style/Theme.Holo.Dialog">
+        <item name="android:textDirection">anyRtl</item>
+    </style>
+    <style name="DlgLight" parent="@android:style/Theme.Holo.Light.Dialog">
+        <item name="android:textDirection">anyRtl</item>
+    </style>
 </resources>
