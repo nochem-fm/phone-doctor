@@ -1418,11 +1418,21 @@ public class MainActivity extends Activity {
     /** Options the model wrote as text ("[לפנות שטח]" lines) at the end of an answer: shown as buttons instead. */
     static final java.util.regex.Pattern OPT = java.util.regex.Pattern.compile("^\\s*(?:[•*\\-]|\\d+[.)])?\\s*\\[([^\\[\\]]{2,60})\\]\\s*$");
 
+    /** One line with all choices: "[a|b|c]" (the ask_user format, written as text). */
+    static final java.util.regex.Pattern OPT_ONE = java.util.regex.Pattern.compile("^\\s*\\[([^\\[\\]]+\\|[^\\[\\]]+)\\]\\s*$");
+
     static List<String> trailingOptions(String text) {
         String[] lines = text.split("\n");
         List<String> opts = new ArrayList<String>();
         int i = lines.length - 1;
         while (i >= 0 && lines[i].trim().isEmpty()) i--;
+        if (i >= 0) {
+            java.util.regex.Matcher one = OPT_ONE.matcher(lines[i]);
+            if (one.find()) {
+                for (String o : one.group(1).split("\\|")) if (o.trim().length() > 1) opts.add(o.trim());
+                return opts.size() >= 2 && opts.size() <= 6 ? opts : new ArrayList<String>();
+            }
+        }
         for (; i >= 0; i--) {
             java.util.regex.Matcher m = OPT.matcher(lines[i]);
             if (!m.find()) break;
@@ -1441,6 +1451,7 @@ public class MainActivity extends Activity {
             int found = 0;
             for (int i = lines.length - 1; i >= 0 && found < opts.size(); i--) {
                 if (lines[i].trim().isEmpty()) { keep = i; continue; }
+                if (OPT_ONE.matcher(lines[i]).find()) { keep = i; break; }
                 if (OPT.matcher(lines[i]).find()) { keep = i; found++; }
             }
             StringBuilder b = new StringBuilder();
