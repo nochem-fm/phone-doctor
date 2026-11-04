@@ -842,7 +842,56 @@ public class MainActivity extends Activity {
             isDeviceOwner()};
     }
 
-    boolean adbOpen;
+    boolean adbOpen, provOpen;
+
+    /** Keys for Claude, OpenAI and other providers. Their models then appear in the model lists as "Claude · model". */
+    View providersBlock() {
+        final LinearLayout wrap = vert();
+        int set = 0;
+        for (String p : Providers.IDS) if (!Providers.key(p).isEmpty()) set++;
+        final String title = set == 0 ? "Claude, ChatGPT, Grok, DeepSeek ועוד" : set + " ספקים מוגדרים";
+        final TextView head = tv("", 14, TXT);
+        head.setPadding(0, dp(6), 0, dp(6));
+        final LinearLayout body = vert();
+        body.setVisibility(provOpen ? View.VISIBLE : View.GONE);
+        head.setText(safeGlyphs(title + "  " + (provOpen ? "\u25BE" : "\u25C2")));
+        click(head, new Runnable() {
+            public void run() {
+                provOpen = !provOpen;
+                body.setVisibility(provOpen ? View.VISIBLE : View.GONE);
+                head.setText(safeGlyphs(title + "  " + (provOpen ? "\u25BE" : "\u25C2")));
+            }
+        });
+        body.addView(note("מפתח של חברה אחרת מוסיף את המודלים שלה לרשימת המודלים, וכל הסוכן עובד איתם אותו דבר (כלים, צילומי מסך, מעבר בין מודלים). "
+            + "אפשר לערבב: למשל Gemini ראשי ו-Claude כגיבוי. בחברות האלה בדרך כלל משלמים לפי שימוש. אחרי הוספת מפתח: 'בדוק מפתח ורענן רשימת מודלים'."));
+        for (int i = 0; i < Providers.IDS.length; i++) {
+            final String p = Providers.IDS[i];
+            TextView n = tv(Providers.NAMES[i], 14, TXT);
+            n.setTypeface(null, Typeface.BOLD);
+            n.setPadding(0, dp(8), 0, 0);
+            body.addView(n);
+            if (p.equals("custom")) {
+                EditText b = field("כתובת, למשל http://192.168.1.5:11434/v1", prefs.getString("base_custom", ""), false, InputType.TYPE_TEXT_VARIATION_URI);
+                b.setTextDirection(View.TEXT_DIRECTION_LTR);
+                bind(b, "base_custom", false);
+                body.addView(b);
+            }
+            EditText k = field("מפתח API", prefs.getString("key_" + p, ""), true, 0);
+            bind(k, "key_" + p, false);
+            body.addView(k);
+            final String url = Providers.KEY_URLS[i];
+            if (!url.isEmpty()) {
+                TextView l = tv(url.replace("https://", ""), 12, ACC);
+                l.setPaintFlags(l.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+                l.setPadding(0, dp(2), 0, dp(4));
+                click(l, new Runnable() { public void run() { openUrl(url); } });
+                body.addView(l);
+            }
+        }
+        wrap.addView(head);
+        wrap.addView(body);
+        return wrap;
+    }
 
     /** Collapsible block: every ADB command on its own row with its own "copy" and "run with root" buttons. */
     View adbBlock() {
@@ -1614,7 +1663,7 @@ public class MainActivity extends Activity {
 
     /** A small line in the chat: which Gemini model is answering from here on. */
     void renderModel(String m) {
-        TextView t = tv("\u2726 עונה עכשיו: " + m, 11, DIM);
+        TextView t = tv("\u2726 עונה עכשיו: " + Providers.label(m), 11, DIM);
         t.setGravity(Gravity.CENTER);
         t.setTextDirection(View.TEXT_DIRECTION_RTL);
         t.setPadding(0, dp(2), 0, dp(4));
@@ -2200,7 +2249,7 @@ public class MainActivity extends Activity {
 
     void onSend(final String t) {
         if (t.isEmpty()) return;
-        if (prefs.getString("key", "").isEmpty()) {
+        if (prefs.getString("key", "").isEmpty() && !Providers.anyKey()) {
             toast("הכנס מפתח Gemini API בהגדרות");
             showSettings();
             return;
@@ -2219,14 +2268,24 @@ public class MainActivity extends Activity {
 
     void withModels(final boolean refresh, final ModelsCb cb) {
         final String key = prefs.getString("key", "");
-        if (key.isEmpty()) { toast("הכנס קודם מפתח API"); return; }
+        if (key.isEmpty() && !Providers.anyKey()) { toast("הכנס קודם מפתח API"); return; }
         String cached = prefs.getString("models", "");
         if (!refresh && !cached.isEmpty()) { cb.got(Arrays.asList(cached.split("\n"))); return; }
         toast("טוען מודלים…");
         new Thread(new Runnable() {
             public void run() {
                 try {
-                    final List<String> m = Models.fetch(key);
+                    final List<String> m = new ArrayList<String>();
+                    final StringBuilder errs = new StringBuilder();
+                    if (!key.isEmpty()) {
+                        try { m.addAll(Models.fetch(key)); } catch (Exception e) { errs.append("Gemini: ").append(Agent.hebrew(e)).append('\n'); }
+                    }
+                    for (String pv : Providers.IDS) {   // other AI companies with a key: their models join the list as "provider:model"
+                        if (Providers.key(pv).isEmpty()) continue;
+                        try { m.addAll(Providers.models(pv)); } catch (Exception e) { errs.append(Providers.name(pv)).append(": ").append(Agent.hebrew(e)).append('\n'); }
+                    }
+                    if (m.isEmpty()) throw new Exception(errs.toString().trim());
+                    if (errs.length() > 0) runOnUiThread(new Runnable() { public void run() { toast("חלק מהמפתחות נכשלו:\n" + errs.toString().trim()); } });
                     StringBuilder sb = new StringBuilder();
                     for (String s : m) sb.append(s).append('\n');
                     SharedPreferences.Editor ed = prefs.edit().putString("models", sb.toString().trim());
@@ -2252,7 +2311,7 @@ public class MainActivity extends Activity {
                 String cur = prefs.getString("model", DEF_MODEL);
                 new AlertDialog.Builder(MainActivity.this, dlg())
                     .setTitle("בחר מודל")
-                    .setSingleChoiceItems(arr, Arrays.asList(arr).indexOf(cur), new DialogInterface.OnClickListener() {
+                    .setSingleChoiceItems(labels(arr), Arrays.asList(arr).indexOf(cur), new DialogInterface.OnClickListener() {
                         public void onClick(DialogInterface d, int w) {
                             prefs.edit().putString("model", arr[w]).apply();
                             d.dismiss();
@@ -2261,6 +2320,12 @@ public class MainActivity extends Activity {
                     }).show();
             }
         });
+    }
+
+    static String[] labels(String[] ids) {
+        String[] l = new String[ids.length];
+        for (int i = 0; i < ids.length; i++) l[i] = Providers.label(ids[i]);
+        return l;
     }
 
     void pickBackups() {
@@ -2273,7 +2338,7 @@ public class MainActivity extends Activity {
                 for (int i = 0; i < arr.length; i++) chk[i] = never || cur.contains(arr[i]);
                 new AlertDialog.Builder(MainActivity.this, dlg())
                     .setTitle("מודלי גיבוי (לפי הסדר מהרשימה)")
-                    .setMultiChoiceItems(arr, chk, new DialogInterface.OnMultiChoiceClickListener() {
+                    .setMultiChoiceItems(labels(arr), chk, new DialogInterface.OnMultiChoiceClickListener() {
                         public void onClick(DialogInterface d, int w, boolean on) { chk[w] = on; }
                     })
                     .setPositiveButton("שמור", new DialogInterface.OnClickListener() {
@@ -2447,9 +2512,13 @@ public class MainActivity extends Activity {
             }
         }), bl);
 
+        // --- other AI companies (optional)
+        c = card(list, "ספקי AI נוספים (לא חובה)");
+        c.addView(providersBlock());
+
         // --- models
         c = card(list, "מודלים");
-        c.addView(row("מודל ראשי", prefs.getString("model", DEF_MODEL), new Runnable() { public void run() { pickModel(); } }));
+        c.addView(row("מודל ראשי", Providers.label(prefs.getString("model", DEF_MODEL)), new Runnable() { public void run() { pickModel(); } }));
         c.addView(sw("מעבר אוטומטי למודל גיבוי כשנגמרת המכסה", prefs.getBoolean("fb", true), "fb"));
         c.addView(row("מודלי גיבוי", fbModels().size() + " נבחרו", new Runnable() { public void run() { pickBackups(); } }));
         c.addView(note("במכסה החינמית לכל מודל יש מכסה נפרדת, אז כדאי לסמן כמה מודלי גיבוי."));

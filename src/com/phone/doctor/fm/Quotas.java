@@ -77,6 +77,7 @@ final class Quotas {
         int sum = 0;
         for (String m : models) {
             if (exhausted.contains(m)) continue;
+            if (Providers.providerOf(m) != null) return -1;   // paid providers: no free daily quota to count
             int lim = limit(m), used = o.optInt(m);
             if (used > lim) return -1;       // more than the assumed limit went through: not the free tier
             sum += lim - used;

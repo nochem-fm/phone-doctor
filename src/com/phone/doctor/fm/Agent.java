@@ -72,11 +72,16 @@ final class Agent {
     String model = "gemini-2.5-flash";
     volatile boolean stop;
     private volatile HttpURLConnection cur;
+    private static volatile HttpURLConnection curExt;   // a request to another AI provider (Providers.call)
+
+    static void current(HttpURLConnection c) { curExt = c; }
 
     /** Stop right now: also cuts a request that is waiting on the network. */
     void abort() {
         stop = true;
         HttpURLConnection c = cur;
+        if (c != null) { try { c.disconnect(); } catch (Exception ignored) { } }
+        c = curExt;
         if (c != null) { try { c.disconnect(); } catch (Exception ignored) { } }
     }
     int actions;
@@ -1629,11 +1634,18 @@ final class Agent {
         int sigTries = 0;
         for (int attempt = 0; attempt < 14; attempt++) {
             String m = pickModel();
-            if (!m.startsWith("gemini-1") && !m.startsWith("gemini-2") && contents.length() > 0) { addDummySignatures(); data = body.toString().getBytes("UTF-8"); }
+            String prov = Providers.providerOf(m);
+            if (prov == null && !m.startsWith("gemini-1") && !m.startsWith("gemini-2") && contents.length() > 0) { addDummySignatures(); data = body.toString().getBytes("UTF-8"); }
             int code;
             String s;
             try {
                 if (stop) throw new Stopped();
+                if (prov != null) {   // Claude / OpenAI / ...: same conversation, translated by Providers
+                    Providers.Result pr = Providers.call(m, body, 180000);
+                    code = pr.code;
+                    s = pr.body;
+                    throw new ExtDone(code, s);
+                }
                 HttpURLConnection c = Net.open(BASE + m + ":generateContent");
                 cur = c;
                 c.setRequestMethod("POST");
@@ -1647,14 +1659,19 @@ final class Agent {
                 s = read(code < 400 ? c.getInputStream() : c.getErrorStream());
                 c.disconnect();
                 cur = null;
+            } catch (ExtDone e) {
+                code = e.code;
+                s = e.body;
             } catch (SocketTimeoutException e) {
                 cur = null;
+                curExt = null;
                 if (stop) throw new Stopped();
                 ErrorLog.add("chat", m, 0, "timeout: " + e.getMessage());
                 if (++tmo < 3) { ui.status("Gemini לא ענה, מנסה שוב…"); continue; }
                 throw new Exception("Gemini לא ענה בזמן (timeout). נסה שוב או החלף למודל מהיר יותר.");
             } catch (java.io.IOException e) {
                 cur = null;
+                curExt = null;
                 if (stop) throw new Stopped();
                 ErrorLog.add("chat", m, 0, String.valueOf(e));
                 throw e;
@@ -1664,6 +1681,14 @@ final class Agent {
             String msg = s;
             try { msg = new JSONObject(s).getJSONObject("error").getString("message"); } catch (Exception ignored) { }
             String low = msg.toLowerCase();
+            if (prov != null) {
+                // another provider: rate limit -> rest this model a little; no key / no credit / bad model -> skip it for an hour
+                boolean noAccess = code == 401 || code == 402 || code == 403 || code == 404
+                    || (code == 400 && (low.contains("credit") || low.contains("balance") || low.contains("billing") || low.contains("model")));
+                if (noAccess && hasOtherModel(m)) { markUntil(m, System.currentTimeMillis() + 3600000L); ui.status(Providers.label(m) + " לא זמין, עובר למודל אחר…"); attempt--; continue; }
+                if (code == 429 && hasOtherModel(m) && ++sw <= 40) { COOL.put(m, System.currentTimeMillis() + 30000L); attempt--; continue; }
+                if (code == 429) { waitMs("מגבלת קצב אצל " + Providers.label(m) + ", ממתין", 20000L); continue; }
+            }
             if (code == 429) {
                 Quota q = quota(s, msg);
                 long delay = q.delayMs;
@@ -1750,7 +1775,13 @@ final class Agent {
         List<String> all = new ArrayList<String>();
         all.add(clean(model));
         if (fallbackOn) for (String f : fallbacks) { f = clean(f); if (!f.isEmpty() && !all.contains(f)) all.add(f); }
-        return all;
+        // a model whose company has no key cannot answer: skip it (keep the list non-empty so the error is clear)
+        List<String> usable = new ArrayList<String>();
+        for (String m : all) {
+            String p = Providers.providerOf(m);
+            if (p == null ? !key.isEmpty() : !Providers.key(p).isEmpty()) usable.add(m);
+        }
+        return usable.isEmpty() ? all : usable;
     }
 
     private boolean hasOtherModel(String m) {
@@ -1821,6 +1852,13 @@ final class Agent {
         List<String> c = candidates();
         for (String m : c) if (exhausted(m)) ex.add(m);
         Quotas.check(ctx, c, ex);
+    }
+
+    /** Carries another provider's HTTP result out of the try block (keeps the Gemini code path unchanged). */
+    private static final class ExtDone extends Exception {
+        final int code;
+        final String body;
+        ExtDone(int code, String body) { super("ext"); this.code = code; this.body = body; }
     }
 
     static final class Quota {
