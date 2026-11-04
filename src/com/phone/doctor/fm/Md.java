@@ -10,6 +10,19 @@ import android.text.style.TypefaceSpan;
 
 /** Tiny markdown renderer: headings, bullets, **bold**, `code`. */
 final class Md {
+    /** The answer as plain text for the clipboard: no ** / ` / # markers. */
+    static String plain(String s) {
+        StringBuilder b = new StringBuilder();
+        for (String l : s.split("\n", -1)) {
+            String x = l;
+            if (x.trim().startsWith("```")) continue;
+            x = x.replaceFirst("^(\\s*)#{1,6}\\s+", "$1").replaceFirst("^(\\s*)[*\\-]\\s+", "$1• ");
+            x = x.replace("**", "").replace("`", "");
+            b.append(x).append('\n');
+        }
+        return b.toString().trim();
+    }
+
     static CharSequence render(String s, int codeBg) {
         SpannableStringBuilder o = new SpannableStringBuilder();
         for (String line : s.split("\n", -1)) {

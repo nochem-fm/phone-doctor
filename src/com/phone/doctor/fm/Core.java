@@ -287,6 +287,10 @@ final class Core {
             H.post(new Runnable() { public void run() { if (ui != null) ui.onStatus(); } });
         }
 
+        public void model(final String m) {
+            H.post(new Runnable() { public void run() { add(entry("m", m)); } });
+        }
+
         public String choose(String question, String[] options) {
             Pending p = new Pending();
             p.purpose = question;

@@ -40,6 +40,8 @@ final class Agent {
         void stepUndo(int idx, long jid, int level);
         /** Shows the question with one button per option; returns the chosen option, or null if dismissed. */
         String choose(String question, String[] options);
+        /** A small line in the chat: this model answers from now on. */
+        void model(String m);
     }
 
     static final class ApiError extends Exception {
@@ -599,7 +601,9 @@ final class Agent {
         }
         String P = pkg;
         String sh = "echo '== APPOPS'; (cmd appops get " + P + " 2>&1 || appops get " + P + " 2>&1) | head -45\n"
-            + "echo '== STANDBY BUCKET'; am get-standby-bucket " + P + " 2>&1\n"
+            + "echo '== STANDBY BUCKET'; b=$(am get-standby-bucket " + P + " 2>&1); echo \"$b\"; case \"$b\" in "
+            + "5) echo '(5 = EXEMPTED: system/whitelisted app, never restricted; the BEST bucket, nothing to fix)';; 10) echo '(10 = ACTIVE)';; 20) echo '(20 = WORKING_SET)';; "
+            + "30) echo '(30 = FREQUENT)';; 40) echo '(40 = RARE)';; 45) echo '(45 = RESTRICTED)';; 50) echo '(50 = NEVER)';; esac\n"
             + "echo '== IN BATTERY-OPTIMIZATION WHITELIST (1=yes)'; dumpsys deviceidle whitelist 2>&1 | grep -c " + P + "\n"
             + "echo '== RUNNING'; pidof " + P + " 2>&1; ps -A 2>/dev/null | grep -F " + P + " | head -5\n"
             + "echo '== LAUNCH ACTIVITY'; cmd package resolve-activity --brief " + P + " 2>&1 | tail -3\n"
@@ -1387,6 +1391,16 @@ final class Agent {
             + "but even then it is NOT the explanation for every problem: blame storage only for what it actually causes (failed installs/updates/downloads, 'No space left'/ENOSPC in the logs, the camera or apps unable to save). "
             + "Never recommend freeing space as the fix for an unrelated symptom. "
             + "Never write 'high confidence' without naming the evidence. If nothing ties to the symptom, say you have not found the cause yet and what you will check next.\n"
+            + "BE PROFESSIONAL: answer every question the user asks, directly and first (a question about a term gets a precise explanation), unless it conflicts with these rules. "
+            + "Never skip or dodge a question, and never answer a different question. State facts you verified; say 'I am not sure' instead of guessing. "
+            + "When a fix did not work, say so plainly and investigate further: do not dress a failure up as progress.\n"
+            + "ANDROID FACTS YOU MUST GET RIGHT: standby buckets are numbers: 5=EXEMPTED (best, never restricted), 10=ACTIVE, 20=WORKING_SET, 30=FREQUENT, 40=RARE, 45=RESTRICTED, 50=NEVER. "
+            + "Setting a bucket to 'active' on an EXEMPTED app makes it WORSE. oom_score_adj and standby buckets are reset by the system all the time: changing them is not a fix.\n"
+            + "WHY WAS A PROCESS KILLED: read the events log, which states the reason: logcat -b events -d | grep -E 'am_kill|am_proc_died|am_remove_task|am_wtf' (am_kill has the reason, e.g. 'remove task', 'stop <pkg>', 'empty', 'lmk'), "
+            + "plus 'logcat -d | grep -iE \"Killing|kill.*<pkg>|force.stop\"'. 'Got obituary' only says it died, not why. "
+            + "Vendor performance lines (PowerHalWrapper amsBoostNotify, mtkpower, BufferQueueDebug, SurfaceFlinger) are boost hints and debug noise, never the cause of a kill.\n"
+            + "NO FAKE COMMANDS: never run a setting key, package or component you did not see on the device (e.g. a made-up 'settings put global xyz' or 'pm hide com.app.Something'). "
+            + "settings put accepts ANY key silently and pm hide/disable of a made-up name proves nothing: such 'fixes' do nothing and you must not claim they worked.\n"
             + "APP NAMES IN HEBREW: users often write an English app name in Hebrew letters (ליברפודס = LibrePods, ווטסאפ = WhatsApp, טלגרם = Telegram, כרום = Chrome, מיקרוסופט לאנצ'ר = Microsoft Launcher). "
             + "Transliterate it to English, or match its letters to an English name (ל=L, ב=B/V, ר=R, פ=P/F, ד=D, ס=S...), and look it up on the device (inspect_app does this matching; or pm list packages / app labels). "
             + "Only if nothing matches, ask which app with ask_user buttons listing the closest candidates.\n"
@@ -1653,7 +1667,7 @@ final class Agent {
             if (code == 429) {
                 Quota q = quota(s, msg);
                 long delay = q.delayMs;
-                if (q.daily) { markUntil(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); continue; }
+                if (q.daily) { Quotas.learn(m, q.limit); markUntil(m, System.currentTimeMillis() + Math.max(delay, 3600000L)); quotaCheck(); continue; }
                 if (q.tokens) {
                     // input-tokens-per-minute: the conversation itself is too big. Shrink it, then try again.
                     if (compactHard()) { data = body.toString().getBytes("UTF-8"); ui.status("השיחה ארוכה, מקצר את ההקשר…"); }
@@ -1777,6 +1791,7 @@ final class Agent {
             }
             if (use != null) break;
             if (!anyAlive) {
+                Quotas.allOut(ctx);
                 long left = Long.MAX_VALUE;
                 for (String m : candidates()) { Long t = UNTIL.get(m); if (t != null) left = Math.min(left, t - now); }
                 long mins = Math.max(1, left / 60000L);
@@ -1794,13 +1809,24 @@ final class Agent {
         if (!use.equals(lastModel)) {
             if (!lastModel.isEmpty()) ui.status("עובר למודל " + use);
             lastModel = use;
+            ui.model(use);
         }
+        Quotas.sent(use);
+        quotaCheck();
         return use;
+    }
+
+    private void quotaCheck() {
+        java.util.Set<String> ex = new java.util.HashSet<String>();
+        List<String> c = candidates();
+        for (String m : c) if (exhausted(m)) ex.add(m);
+        Quotas.check(ctx, c, ex);
     }
 
     static final class Quota {
         boolean daily, tokens;
         long delayMs;
+        int limit;
     }
 
     /** Reads which free-tier quota was hit from the structured error (quotaId, retryDelay), falling back to the text. */
@@ -1813,7 +1839,10 @@ final class Agent {
             for (int i = 0; det != null && i < det.length(); i++) {
                 JSONObject d = det.getJSONObject(i);
                 JSONArray v = d.optJSONArray("violations");
-                for (int j = 0; v != null && j < v.length(); j++) ids.append(v.getJSONObject(j).optString("quotaId")).append(' ').append(v.getJSONObject(j).optString("quotaMetric")).append(' ');
+                for (int j = 0; v != null && j < v.length(); j++) {
+                    ids.append(v.getJSONObject(j).optString("quotaId")).append(' ').append(v.getJSONObject(j).optString("quotaMetric")).append(' ');
+                    try { q.limit = Integer.parseInt(v.getJSONObject(j).optString("quotaValue", "0")); } catch (Exception ignored) { }
+                }
                 String rd = d.optString("retryDelay", "");
                 if (rd.endsWith("s")) { try { q.delayMs = (long) (Double.parseDouble(rd.substring(0, rd.length() - 1)) * 1000); } catch (Exception ignored) { } }
             }

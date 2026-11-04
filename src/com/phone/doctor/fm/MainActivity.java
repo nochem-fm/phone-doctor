@@ -120,6 +120,11 @@ public class MainActivity extends Activity {
         // RTL paragraphs whenever the text has Hebrew, even if it starts with an English word (Gemini, root, API...)
         getWindow().getDecorView().setTextDirection(View.TEXT_DIRECTION_ANY_RTL);
         if (b == null) freshStart();   // opening the app starts on the main screen, not inside the last chat
+        if (Build.VERSION.SDK_INT >= 33 && termsOk() && !prefs.getBoolean("asked_notif", false)
+            && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean("asked_notif", true).apply();   // quota warnings, follow-ups, wireless-debugging pairing
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 77);
+        }
         if (!termsOk()) showTerms(false);
         else if (prefs.getBoolean("setup", false)) showChat();
         else showSetup(true);
@@ -177,6 +182,12 @@ public class MainActivity extends Activity {
 
     void handleIntent(Intent i) {
         if (!termsOk()) return;
+        if (i != null && i.hasExtra("adbResult")) {
+            String res = i.getStringExtra("adbResult");
+            i.removeExtra("adbResult");
+            new AlertDialog.Builder(this, dlg()).setTitle("ניפוי באגים אלחוטי").setMessage(res).setPositiveButton("סגור", null).show();
+            if (screen.equals("settings")) showSettings();
+        }
         if (i != null && i.getBooleanExtra("needA11y", false)) {
             i.removeExtra("needA11y");
             if (canWriteSecure()) enableAccessibility();
@@ -880,9 +891,65 @@ public class MainActivity extends Activity {
             r.addView(btns);
             body.addView(r);
         }
+        if (done < st.length) body.addView(wirelessRow(), 0);
         wrap.addView(head);
         wrap.addView(body);
         return wrap;
+    }
+
+    /** "Do it for me": Phone Doctor runs the ADB commands itself through wireless debugging (Android 11+, Wi-Fi). */
+    View wirelessRow() {
+        LinearLayout r = vert();
+        r.setPadding(0, dp(4), 0, dp(12));
+        TextView t = tv("\u26A1 בלי מחשב: האפליקציה תריץ את הפקודות לבד", 14, TXT);
+        t.setTypeface(null, Typeface.BOLD);
+        TextView d = tv(AdbSetup.supported()
+            ? "דרך ניפוי באגים אלחוטי (אנדרואיד 11 ומעלה, מחובר ל-Wi-Fi). צריך רק להפעיל אותו ולפתוח את חלון קוד הצימוד; את השאר האפליקציה עושה לבד, וכשהיא מסיימת היא מכבה אותו."
+            : "דורש אנדרואיד 11 ומעלה (ניפוי באגים אלחוטי). במכשיר הזה צריך מחשב.", 12, DIM);
+        d.setPadding(0, dp(2), 0, dp(6));
+        r.addView(t);
+        r.addView(d);
+        if (AdbSetup.supported()) {
+            TextView go = tv("התחל", 14, ON_ACC);
+            go.setBackground(rr(ACC, 18));
+            go.setPadding(dp(18), dp(8), dp(18), dp(8));
+            click(go, new Runnable() { public void run() { startWireless(); } });
+            r.addView(go, new LinearLayout.LayoutParams(W, W));
+        }
+        return r;
+    }
+
+    void startWireless() {
+        if (!AdbSetup.onWifi(this)) { toast("צריך להיות מחובר ל-Wi-Fi (כל רשת, גם בלי אינטרנט)"); return; }
+        if (!AdbSetup.devOptionsOn(this)) {
+            new AlertDialog.Builder(this, dlg()).setTitle("קודם צריך להפעיל אפשרויות מפתח")
+                .setMessage("הגדרות > מידע על הטלפון > לחץ 7 פעמים על 'מספר Build' עד שמופיע 'אתה מפתח עכשיו'. אחר כך חזור ולחץ שוב 'התחל'.")
+                .setPositiveButton("פתח מידע על הטלפון", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface di, int w) {
+                        try { startActivity(new Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)); } catch (Exception ignored) { }
+                    }
+                }).setNegativeButton("סגור", null).show();
+            return;
+        }
+        if (Core.prefs().getBoolean("adb_paired", false) && AdbSetup.canWriteSecure(this)) {   // nothing for the user to do
+            toast("מתחבר לניפוי באגים אלחוטי…");
+            AdbSetup.start(this);
+            return;
+        }
+        String msg = "1. בחלון שייפתח הפעל את 'ניפוי באגים אלחוטי' ואשר.\n"
+            + "2. לחץ על 'ניפוי באגים אלחוטי' עצמו, ואז על 'התאמת מכשיר באמצעות קוד התאמה'.\n"
+            + "3. " + (ScreenService.inst != null ? "Phone Doctor יקרא את הקוד מהמסך ויסיים לבד." : "הקלד את הקוד בן 6 הספרות בהתראה של Phone Doctor (משוך את שורת ההתראות).")
+            + "\n\nבסוף תקפוץ הודעה עם התוצאה.";
+        new AlertDialog.Builder(this, dlg()).setTitle("הגדרה דרך ניפוי באגים אלחוטי").setMessage(msg)
+            .setPositiveButton("פתח הגדרות מפתח", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface di, int w) {
+                    AdbSetup.start(MainActivity.this);
+                    try {
+                        startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                            .putExtra(":settings:fragment_args_key", "toggle_adb_wireless").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    } catch (Exception e) { toast("פתח ידנית: הגדרות > מערכת > אפשרויות מפתח"); }
+                }
+            }).setNegativeButton("ביטול", null).show();
     }
 
     void copyOne(String cmd) {
@@ -1326,6 +1393,7 @@ public class MainActivity extends Activity {
         String k = e.optString("k");
         if (k.equals("u")) renderUser(e.optString("t"));
         else if (k.equals("s")) renderSteps(e.optJSONArray("steps"));
+        else if (k.equals("m")) renderModel(e.optString("t"));
         else {
             renderAI(e.optString("t"), k.equals("e"));
             if (k.equals("e") && e.optBoolean("q") && last && !Core.running) addResume();
@@ -1460,7 +1528,9 @@ public class MainActivity extends Activity {
         TextView spark = tv("\u2726", 18, TXT);
         grad(spark);
         final List<String> opts = err ? new ArrayList<String>() : trailingOptions(text);
-        if (!opts.isEmpty()) {   // cut the option lines out of the text; they become buttons below
+        boolean yesNo = !err && opts.isEmpty() && yesNoQuestion(text);
+        if (yesNo) { opts.add("כן"); opts.add("לא"); }
+        if (!opts.isEmpty() && !yesNo) {   // cut the option lines out of the text; they become buttons below
             String[] lines = text.split("\n");
             int keep = lines.length;
             int found = 0;
@@ -1480,6 +1550,21 @@ public class MainActivity extends Activity {
         t.setPadding(0, dp(4), 0, dp(12));
         chat.addView(spark);
         chat.addView(t);
+        if (!err) {   // copies just this answer
+            final String plain = text;
+            TextView cp = tv("\u2398 העתק", 12, DIM);
+            cp.setPadding(dp(10), dp(2), dp(10), dp(6));
+            click(cp, new Runnable() {
+                public void run() {
+                    ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("answer", Md.plain(plain)));
+                    toast("התשובה הועתקה");
+                }
+            });
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(W, W);
+            cl.gravity = Gravity.LEFT;
+            cl.bottomMargin = dp(4);
+            chat.addView(cp, cl);
+        }
         if (!opts.isEmpty()) {
             LinearLayout box = vert();
             box.setPadding(0, 0, 0, dp(10));
@@ -1515,6 +1600,33 @@ public class MainActivity extends Activity {
                 public void run() { scroll.smoothScrollTo(0, Math.max(0, start.getTop() - dp(8))); }
             });
         }
+    }
+
+    /** The answer ends with a yes/no question ("האם תרצה שאבצע...?") and offers no buttons: give it כן / לא. */
+    static boolean yesNoQuestion(String text) {
+        String t = text.trim();
+        if (!t.endsWith("?")) return false;
+        int cut = Math.max(t.lastIndexOf('\n', t.length() - 2), Math.max(t.lastIndexOf(". ", t.length() - 2), t.lastIndexOf("? ", t.length() - 2)));
+        String q = t.substring(cut + 1).trim();
+        if (q.contains(" או ") || q.contains("איזה") || q.contains("מה ") || q.contains("איך") || q.contains("למה") || q.contains("כמה")) return false;
+        return q.startsWith("האם") || q.startsWith("שאבצע") || q.startsWith("לבצע") || q.startsWith("לנסות") || q.startsWith("שאנסה") || q.startsWith("רוצה") || q.startsWith("תרצה");
+    }
+
+    /** A small line in the chat: which Gemini model is answering from here on. */
+    void renderModel(String m) {
+        TextView t = tv("\u2726 עונה עכשיו: " + m, 11, DIM);
+        t.setGravity(Gravity.CENTER);
+        t.setTextDirection(View.TEXT_DIRECTION_RTL);
+        t.setPadding(0, dp(2), 0, dp(4));
+        chat.addView(t, new LinearLayout.LayoutParams(M, W));
+        if (!replaying && nearEnd()) scrollDown();
+    }
+
+    /** True when the user is looking at the bottom of the chat (then new content keeps the view at the bottom). */
+    boolean nearEnd() {
+        if (scroll == null || scroll.getChildCount() == 0) return true;
+        View c = scroll.getChildAt(0);
+        return scroll.getScrollY() + scroll.getHeight() >= c.getHeight() - dp(160);
     }
 
     void addResume() {
@@ -1585,6 +1697,7 @@ public class MainActivity extends Activity {
 
     void updateLive() {
         if (liveHead == null || liveSteps == null) return;
+        boolean follow = Core.running && nearEnd();
         boolean open = liveBody.getVisibility() == View.VISIBLE;
         if (open) {
             StringBuilder sig = new StringBuilder();
@@ -1600,6 +1713,7 @@ public class MainActivity extends Activity {
             }
         }
         setHead(liveHead, liveSteps, true, open);
+        if (follow) scrollDown();
     }
 
     void fillSteps(LinearLayout body, JSONArray steps) {
@@ -1874,6 +1988,7 @@ public class MainActivity extends Activity {
             if (k.equals("u")) sb.append("\n━━━━━━━━━━\nשאלה: ").append(e.optString("t")).append('\n');
             else if (k.equals("a")) sb.append("\nתשובה:\n").append(e.optString("t").replace("**", "")).append('\n');
             else if (k.equals("e")) sb.append("\nשגיאה: ").append(e.optString("t")).append('\n');
+            else if (k.equals("m")) sb.append("(עונה: ").append(e.optString("t")).append(")\n");
             else if (k.equals("s")) {
                 JSONArray st = e.optJSONArray("steps");
                 if (st == null || st.length() == 0) continue;
@@ -2235,6 +2350,7 @@ public class MainActivity extends Activity {
         e.setHintTextColor(DIM);
         e.setSingleLine(true);
         e.setInputType(InputType.TYPE_CLASS_TEXT | extraType | (secret ? InputType.TYPE_TEXT_VARIATION_PASSWORD : 0));
+        e.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);   // Hebrew form: hint and pasted key (Latin) both on the right
         imeOnTouch(e);
         return e;
     }
