@@ -121,7 +121,7 @@ final class LocalAnswers {
         try {
             StatFs s = new StatFs(Environment.getDataDirectory().getPath());
             long free = (long) s.getAvailableBlocks() * s.getBlockSize(), total = (long) s.getBlockCount() * s.getBlockSize();
-            sb.append("storage /data: ").append(gb(free)).append(" free of ").append(gb(total)).append(free * 100 / Math.max(1, total) < 10 ? " (LOW)" : "").append('\n');
+            sb.append("storage /data: ").append(gb(free)).append(" free of ").append(gb(total)).append(free * 100 / Math.max(1, total) < 3 ? " (over 97% used)" : " (fine: under 97% used is not a shortage)").append('\n');
         } catch (Exception ignored) { }
         try {
             ActivityManager am = (ActivityManager) c.getSystemService(Context.ACTIVITY_SERVICE);

@@ -499,6 +499,32 @@ final class Agent {
 
     // ---------------------------------------------------------------- local diagnostics (one request instead of many)
 
+    /** Consonant skeleton shared by Hebrew and Latin spellings of a name, so "ליברפודס" and "LibrePods" meet (LBRPDS). */
+    static String skel(String s) {
+        String x = s.toLowerCase(java.util.Locale.US).replace("ch", "k").replace("sh", "s").replace("ph", "p").replace("th", "t").replace("ck", "k").replace("x", "ks");
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < x.length(); i++) {
+            char c = x.charAt(i), m = 0;
+            switch (c) {
+                case 'b': case 'v': case '\u05D1': m = 'B'; break;
+                case 'p': case 'f': case '\u05E4': case '\u05E3': m = 'P'; break;
+                case 'k': case 'c': case 'q': case '\u05DB': case '\u05DA': case '\u05E7': case '\u05D7': m = 'K'; break;
+                case 's': case '\u05E1': case '\u05E9': case '\u05E6': case '\u05E5': m = 'S'; break;
+                case 'z': case '\u05D6': m = 'Z'; break;
+                case 't': case '\u05EA': case '\u05D8': m = 'T'; break;
+                case 'd': case '\u05D3': m = 'D'; break;
+                case 'g': case 'j': case '\u05D2': m = 'G'; break;
+                case 'l': case '\u05DC': m = 'L'; break;
+                case 'm': case '\u05DE': case '\u05DD': m = 'M'; break;
+                case 'n': case '\u05E0': case '\u05DF': m = 'N'; break;
+                case 'r': case '\u05E8': m = 'R'; break;
+                default: m = 0;   // vowels, w/y/h, and the Hebrew vowel letters א ה ו י ע
+            }
+            if (m != 0 && (b.length() == 0 || b.charAt(b.length() - 1) != m)) b.append(m);
+        }
+        return b.toString();
+    }
+
     private static boolean pkgExists(PackageManager pm, String p) {
         try { pm.getPackageInfo(p, 0); return true; } catch (Exception e) { return false; }
     }
@@ -510,6 +536,7 @@ final class Agent {
         actions++;
         PackageManager pm = ctx.getPackageManager();
         String ql = q.toLowerCase();
+        String qs = hebrew(q) > 0 ? skel(q) : "";      // "ליברפודס" -> LBRPDS, matches "LibrePods"
         int best = 0, bestCount = 0;
         String bestPkg = null;
         StringBuilder cand = new StringBuilder(), user = new StringBuilder();
@@ -519,6 +546,11 @@ final class Agent {
             int sc = (p.equals(ql) || l.equals(ql)) ? 100
                 : (l.contains(ql) || p.contains(ql)) ? 60
                 : (ql.length() >= 4 && (l.contains(ql.substring(0, 4)) || p.contains(ql.substring(0, 4)))) ? 30 : 0;
+            if (sc == 0 && qs.length() >= 3 && hebrew(label) == 0) {
+                String ls = skel(label);
+                if (ls.equals(qs)) sc = 80;
+                else if (ls.length() >= 3 && (ls.startsWith(qs) || qs.startsWith(ls))) sc = 50;
+            }
             boolean sys = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
             if (sc > 0) {
                 cand.append(label).append(" = ").append(ai.packageName).append("\n");
@@ -1350,8 +1382,14 @@ final class Agent {
             + "REPORT ACTIONS EXACTLY: describe what a command really does (pm trim-caches frees cache of ALL apps only when space is needed; it does not 'clear the cache of app X'). Never claim an effect you did not measure.\n"
             + "FIRST ANSWER TO A 'WHY' QUESTION CHANGES NOTHING: investigate, explain, and offer options; make changes only after the user picks one (even in autonomous mode for anything beyond a read-only check).\n"
             + "EVIDENCE, NOT BACKGROUND NOISE: a cause must be tied to THIS symptom by evidence (a log line naming the component, a timestamp matching when it started, a state that explains it). "
-            + "Generic findings (storage 90-95% full with GBs free, uptime, unrelated app crashes, an old security patch) are NOT a cause; mention one only if it is extreme (under ~500 MB free, or ENOSPC/'No space left' in the logs). "
+            + "Generic findings (uptime, unrelated app crashes, an old security patch) are NOT a cause. "
+            + "STORAGE: up to 97% used is NOT a storage shortage and must not be called low, critical or a cause of anything. Above 97% it is a real shortage worth mentioning, "
+            + "but even then it is NOT the explanation for every problem: blame storage only for what it actually causes (failed installs/updates/downloads, 'No space left'/ENOSPC in the logs, the camera or apps unable to save). "
+            + "Never recommend freeing space as the fix for an unrelated symptom. "
             + "Never write 'high confidence' without naming the evidence. If nothing ties to the symptom, say you have not found the cause yet and what you will check next.\n"
+            + "APP NAMES IN HEBREW: users often write an English app name in Hebrew letters (ליברפודס = LibrePods, ווטסאפ = WhatsApp, טלגרם = Telegram, כרום = Chrome, מיקרוסופט לאנצ'ר = Microsoft Launcher). "
+            + "Transliterate it to English, or match its letters to an English name (ל=L, ב=B/V, ר=R, פ=P/F, ד=D, ס=S...), and look it up on the device (inspect_app does this matching; or pm list packages / app labels). "
+            + "Only if nothing matches, ask which app with ask_user buttons listing the closest candidates.\n"
             + "WHEN THE USER REJECTS AN EXPLANATION ('that is not it', 'no connection'), drop it completely: do not repeat it, do not keep recommending it. Look for other evidence.\n"
             + "WHEN THE USER SAYS IT WORKS NOW, believe what they see. Verify with the right signal and report what changed; do not argue from an ambiguous reading.\n"
             + "READ DUMPSYS BY SECTION: many dumpsys outputs repeat the same field in several sections (dumpsys wallpaper has System, Lock and Fallback sections; the Fallback connection having mService=null is NORMAL). "
@@ -1385,7 +1423,7 @@ final class Agent {
             + "Match the dates to what the user said; explain what the system was doing before each reboot. Storage is relevant only if the log shows write/space errors at that time.\n"
             + "- 'health check' / 'בדיקת בריאות': call inspect_system with focus general, battery, performance, storage, network AND crashes in ONE response (6 parallel calls). "
             + "A health check is a REPORT: do not change anything and do not ask to change anything during it (no clearing data, no restarts). "
-            + "Thresholds: storage free <10% attention, <5% problem; RAM available <15% attention; battery health not Good or temperature >40C problem, >37C attention; "
+            + "Thresholds: storage used >97% attention (below that it is fine, never a problem); RAM available <15% attention; battery health not Good or temperature >40C problem, >37C attention; "
             + "uptime >14 days suggest restart; security patch older than 12 months attention; an app with 3+ crashes/ANRs in the history attention (name it, count, dates); "
             + "system_server crashes or watchdog = problem. Never suggest a factory reset in a health check unless there is clear evidence of system damage, and then only as a last resort.\n"
             + "- 'APK will not install' / 'לא מצליח להתקין': find_files with a word from the app name (type archive; also try English/Hebrew variants) -> apk_info on the best match "
