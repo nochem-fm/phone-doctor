@@ -457,7 +457,12 @@ final class Agent {
         ui.status("מוריד…");
         actions++;
         try {
-            Web.Download d = Web.download(url, a.optString("file_name", null), new Stopper() { public boolean stopped() { return stop; } });
+            Web.Download d = Web.download(url, a.optString("file_name", null), a.optBoolean("executable", false), new Stopper() { public boolean stopped() { return stop; } });
+            if (d.blocked != null) {
+                out.put("error", "HTTP " + d.code + " from " + d.url + String.format(Web.BLOCK_NOTE, d.blocked));
+                ui.stepDone(st, false, "חסום על ידי הסינון: " + d.blocked, null);
+                return;
+            }
             if (d.path == null) {
                 out.put("error", "HTTP " + d.code + " (" + d.type + ") from " + d.url);
                 ui.stepDone(st, false, "ההורדה נכשלה: HTTP " + d.code, null);
@@ -1529,6 +1534,10 @@ final class Agent {
             + "(pick the asset for this phone's ABI " + java.util.Arrays.toString(Build.SUPPORTED_ABIS) + " or universal); or the vendor's own download page (fetch_url lists its APK links); "
             + "3) download_file; 4) check the result (package, version, ABI, minSdk; a tiny HTML file means a wrong link); 5) apk_install. "
             + "Prefer official sources (F-Droid, the project's GitHub, the vendor); never random mirror sites; give the user the SHA-256. Do not give up after one failed link: try the next source.\n"
+            + "INTERNET FILTERS: many users are behind NetFree / Rimon / Etrog. When a fetch or download is blocked by the filter (the tool says BLOCKED BY THE INTERNET FILTER, "
+            + "or a block page / HTTP 418 / 403 comes back instead of the file), say exactly that: the filter blocks it. Do not call it a broken link, a phone problem or a missing file.\n"
+            + "RUNNING PROGRAMS: this app targets SDK 28, so a binary downloaded with download_file executable=true into " + ctx.getFilesDir() + "/bin can be run directly from run_command "
+            + "(pick the build for ABI " + Build.SUPPORTED_ABIS[0] + ", a static binary). Shared storage (/sdcard) is noexec: never run programs from there.\n"
             + "QUOTE TIMES AND NUMBERS EXACTLY as a tool printed them (a time from a timeline stays that time); never compute, shift or invent a time.\n"
             + "AN APP THAT 'DISAPPEARED': check pm list packages -u (record kept) and the data folder (/data/data/<pkg>). If the record or data is kept, "
             + "reinstalling the same app restores it with its data and login: say so, never claim the user must log in again without checking.\n"
@@ -1687,6 +1696,7 @@ final class Agent {
             new String[][]{{"url", "string", "http(s) URL"}, {"max_chars", "number", "Optional, default 15000, max 40000."}}, "url"));
         d.put(fn("download_file", "Download a file (an APK, an archive...) from a direct URL into the app's folder. Returns its path, size and SHA-256; for an APK also package, version and whether it fits this phone. Then use apk_install with the path.",
             new String[][]{{"url", "string", "Direct download URL"}, {"file_name", "string", "Optional name to save as"},
+                {"executable", "boolean", "true for a program to run (static binary/script): saved in the app's private bin folder, chmod +x, runnable with run_command"},
                 {"purpose", "string", "One short Hebrew sentence. Shown to the user."}}, "url", "purpose"));
         d.put(fn("remember", "Save something to this phone's permanent memory, used in every future chat. kind=fact: a stable device fact (ROM/skin, root type, a quirk, an app that is known to misbehave). kind=recipe: a fix that was VERIFIED to work, as 'problem -> exact fix'. Never save personal data (names, numbers, messages, passwords).",
             new String[][]{{"kind", "string", "fact or recipe"}, {"text", "string", "Short, specific, max 300 chars."}}, "kind", "text"));

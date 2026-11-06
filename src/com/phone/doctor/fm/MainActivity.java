@@ -708,8 +708,8 @@ public class MainActivity extends Activity {
             PackageManager pm = getPackageManager();
             PackageInfo pi = pm.getPackageInfo(getPackageName(), PackageManager.GET_PERMISSIONS);
             for (String p : pi.requestedPermissions) {
-                if (p.equals("android.permission.WRITE_EXTERNAL_STORAGE") && Build.VERSION.SDK_INT >= 30) continue;
-                if (p.equals("android.permission.READ_EXTERNAL_STORAGE") && Build.VERSION.SDK_INT >= 33) continue;
+                // targetSdk 28: READ/WRITE_EXTERNAL_STORAGE still give full (legacy) storage access on every Android version
+                if (p.startsWith("com.termux")) continue;   // asked for in Settings > Termux
                 try {
                     PermissionInfo info = pm.getPermissionInfo(p, 0);
                     boolean dangerous = (info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE) == PermissionInfo.PROTECTION_DANGEROUS;
@@ -733,7 +733,7 @@ public class MainActivity extends Activity {
 
     boolean overlayOk() { return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this); }
 
-    boolean filesOk() { return Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager(); }
+    boolean filesOk() { return MainActivityHelper.filesOk(); }
 
     boolean batteryOk() {
         return Build.VERSION.SDK_INT < 23 || ((PowerManager) getSystemService(POWER_SERVICE)).isIgnoringBatteryOptimizations(getPackageName());

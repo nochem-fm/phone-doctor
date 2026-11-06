@@ -35,6 +35,22 @@ final class Web {
         return c;
     }
 
+    /** Which content filter blocked the request (NetFree, Rimon, Etrog...), or null. */
+    static String filterBlock(int code, String finalUrl, String body) {
+        String u = String.valueOf(finalUrl).toLowerCase(), b = body == null ? "" : body.toLowerCase();
+        String[][] f = {{"netfree", "נטפרי (NetFree)"}, {"rimon", "רימון"}, {"etrog", "אתרוג"}, {"jnet", "JNet"}, {"meshimer", "משימר"}, {"koshernet", "כשר-נט"},
+            {"nativ", "נתיב"}, {"internet-rimon", "רימון"}};
+        for (String[] x : f) if (u.contains(x[0])) return x[1];
+        if (code == 418 || code == 451 || b.contains("netfree") || b.contains("נטפרי")) return b.contains("rimon") || b.contains("רימון") ? "רימון" : "נטפרי (NetFree) או סינון דומה";
+        if ((code == 403 || b.length() < 20000) && (b.contains("האתר חסום") || b.contains("הדף חסום") || b.contains("site is blocked") || b.contains("blocked by") || b.contains("סינון")))
+            return "סינון אינטרנט (הדף חסום)";
+        return null;
+    }
+
+    static final String BLOCK_NOTE = "\nBLOCKED BY THE INTERNET FILTER (%s). This is NOT a broken link or a phone problem: tell the user plainly that the filter blocks this file/page, "
+        + "and that they can ask the filter to open it (NetFree: the request-to-open form on the block page or netfree.link; Rimon/Etrog: their support), "
+        + "or get the file another way and you will install it from the phone. You may try one other official source; do not keep retrying.";
+
     /** Text of a page or API (JSON as is; HTML as text plus its links). */
     static String fetch(String url, int max) throws Exception {
         HttpURLConnection c = get(url, 30000);
@@ -48,7 +64,10 @@ final class Web {
         }
         String body = in == null ? "" : Agent.read(in);
         c.disconnect();
-        StringBuilder sb = new StringBuilder("HTTP " + code + " " + type + "\nfinal url: " + finalUrl + "\n\n");
+        String blk = filterBlock(code, finalUrl, body.length() > 30000 ? body.substring(0, 30000) : body);
+        StringBuilder sb = new StringBuilder("HTTP " + code + " " + type + "\nfinal url: " + finalUrl + "\n");
+        if (blk != null) sb.append(String.format(BLOCK_NOTE, blk)).append('\n');
+        sb.append('\n');
         if (type.contains("html")) {
             Set<String> links = new LinkedHashSet<String>();
             Matcher m = Pattern.compile("href\\s*=\\s*[\"']([^\"'#]+)[\"']", Pattern.CASE_INSENSITIVE).matcher(body);
@@ -69,16 +88,22 @@ final class Web {
         return s.length() > max ? s.substring(0, max) + "\n...[cut at " + max + " chars]" : s;
     }
 
-    static final class Download { String path, type, sha256, url; long size; int code; }
+    static final class Download { String path, type, sha256, url, blocked; long size; int code; }
 
     /** Downloads into the app's own folder (readable by the installer). Max 400 MB. */
-    static Download download(String url, String name, Agent.Stopper stop) throws Exception {
+    static Download download(String url, String name, boolean executable, Agent.Stopper stop) throws Exception {
         HttpURLConnection c = get(url, 60000);
         Download d = new Download();
         d.code = c.getResponseCode();
         d.type = String.valueOf(c.getContentType());
         d.url = c.getURL().toString();
-        if (d.code >= 400) { c.disconnect(); return d; }
+        if (d.code >= 400) {
+            String body = "";
+            try { InputStream es = c.getErrorStream(); if (es != null) body = Agent.read(es); } catch (Exception ignored) { }
+            d.blocked = filterBlock(d.code, d.url, body.length() > 30000 ? body.substring(0, 30000) : body);
+            c.disconnect();
+            return d;
+        }
         if (name == null || name.trim().isEmpty()) {
             String cd = c.getHeaderField("Content-Disposition");
             Matcher m = cd == null ? null : Pattern.compile("filename\\*?=(?:UTF-8'')?\"?([^\";]+)").matcher(cd);
@@ -86,7 +111,8 @@ final class Web {
             if (name.isEmpty()) name = "download.bin";
         }
         name = name.replaceAll("[\\\\/:*?\"<>|]", "_");
-        File dir = new File(Core.app.getExternalFilesDir(null), "downloads");
+        // executables go to internal storage (shared storage is mounted noexec); targetSdk 28 allows running them
+        File dir = executable ? new File(Core.app.getFilesDir(), "bin") : new File(Core.app.getExternalFilesDir(null), "downloads");
         dir.mkdirs();
         File f = new File(dir, name);
         MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -109,7 +135,18 @@ final class Web {
             c.disconnect();
         }
         f.setReadable(true, false);
+        if (executable) f.setExecutable(true, false);
         d.path = f.getAbsolutePath();
+        if (total < 200000 && (d.type.contains("html") || d.type.contains("text"))) {   // a small page instead of the file: maybe a filter's block page
+            try {
+                java.io.FileInputStream fi = new java.io.FileInputStream(f);
+                byte[] b = new byte[(int) total];
+                int off = 0, k;
+                while (off < b.length && (k = fi.read(b, off, b.length - off)) > 0) off += k;
+                fi.close();
+                d.blocked = filterBlock(d.code, d.url, new String(b, "UTF-8"));
+            } catch (Exception ignored) { }
+        }
         d.size = total;
         StringBuilder h = new StringBuilder();
         for (byte b : md.digest()) h.append(String.format("%02x", b));
