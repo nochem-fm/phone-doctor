@@ -79,6 +79,8 @@ final class Compat {
     /** A PendingIntent the system may fill in (install/uninstall results). */
     static int mutable() { return Build.VERSION.SDK_INT >= 31 ? 0x02000000 : 0; }
 
+    static void startForegroundService(Context c, Intent i) { c.startForegroundService(i); }
+
     /** TLS keying-material exporter (adb wireless pairing). */
     static byte[] exportKeyingMaterial(javax.net.ssl.SSLSocket s, String label, int len) throws javax.net.ssl.SSLException {
         return android.net.ssl.SSLSockets.exportKeyingMaterial(s, label, null, len);

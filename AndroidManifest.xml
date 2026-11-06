@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.phone.doctor.fm"
-    android:versionCode="66"
-    android:versionName="6.6">
+    android:versionCode="67"
+    android:versionName="6.7">
 
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="33" />
 
@@ -32,6 +32,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- run commands inside Termux (its RUN_COMMAND service) -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
     <!-- granted automatically through root (pm grant) -->
     <uses-permission android:name="android.permission.READ_LOGS" />
     <uses-permission android:name="android.permission.DUMP" />
@@ -40,6 +42,7 @@
 
     <!-- Android 11+: lets the app see installed speech recognizers for the mic button -->
     <queries>
+        <package android:name="com.termux" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
@@ -90,6 +93,9 @@
         </service>
 
         <!-- follow-up checks the agent scheduled, background monitoring, re-arming after reboot -->
+        <!-- results of commands run in Termux -->
+        <receiver android:name=".Termux$Done" android:exported="false" />
+
         <!-- the wireless-debugging pairing code typed into the notification -->
         <receiver android:name=".AdbSetup$CodeReceiver" android:exported="false" />
 

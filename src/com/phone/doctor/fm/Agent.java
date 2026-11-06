@@ -227,6 +227,8 @@ final class Agent {
         return false;
     }
 
+    private boolean diagShown;
+
     private boolean lazy(String answer, int toolsUsed, String userText) {
         if (!isTask(userText) || answer.isEmpty()) return false;
         if (answer.contains("רק בבעיות") || answer.contains("רק בנושאי")) return false;   // a scope refusal is a valid reply
@@ -328,7 +330,7 @@ final class Agent {
                 for (JSONObject c : calls) if ("ask_user".equals(c.optString("name"))) asks = true;
                 if (asks) {   // the diagnosis comes with the options: show its Hebrew part as an answer, never the model's English notes
                     String shown = userFacing(think);
-                    if (shown.length() > 150) { ui.reply(shown); think = ""; }
+                    if (shown.length() > 150) { ui.reply(shown); think = ""; diagShown = true; }
                 }
                 if (!think.isEmpty()) {
                     String first = think.split("\n")[0];
@@ -391,6 +393,7 @@ final class Agent {
                 case "apk_info": apkInfo(args, out); break;
                 case "read_output": out.put("result", Shell.Outputs.read(args.optString("output_id"), args.optString("grep", ""), Math.max(1, args.optInt("from_line", 1)), Math.max(1, Math.min(400, args.optInt("lines", 120))))); break;
                 case "run_background": runBackground(args, out); break;
+                case "termux_run": termuxRun(args, out); break;
                 case "app_settings_action": appSettingsAction(args, out); break;
                 case "app_uninstall": appUninstall(args, out); break;
                 case "find_files": findFiles(args, out); break;
@@ -418,6 +421,45 @@ final class Agent {
         if (auto && !force && !risk.equals("dangerous") && !Safety.sensitive(cmd)) return true;
         ui.status("ממתין לאישור שלך…");
         return ui.confirm(purpose, cmd, root, risk);
+    }
+
+    private void termuxRun(JSONObject args, JSONObject out) throws Exception {
+        String cmd = args.getString("command");
+        String purpose = args.optString("purpose", cmd);
+        String risk = args.optString("risk", "modifies");
+        int timeout = Math.max(10, Math.min(600, args.optInt("timeout_sec", 120)));
+        int st = ui.step("cmd", purpose, "[Termux]\n" + cmd);
+        if (!Termux.installed(ctx)) {
+            out.put("error", "Termux is not installed. Tell the user it can be installed from F-Droid or GitHub (not the old Play Store version), then connected in Phone Doctor Settings > Termux.");
+            ui.stepDone(st, false, "Termux לא מותקן", null);
+            return;
+        }
+        if (Safety.blocked(cmd)) {
+            out.put("error", "BLOCKED: this command is catastrophic and is never allowed.");
+            ui.stepDone(st, false, "נחסם: פקודה הרסנית", null);
+            return;
+        }
+        boolean ro = risk.equals("read_only") && Safety.readOnly(cmd);
+        if (!allow(purpose, "[Termux]\n" + cmd, false, ro ? "read_only" : risk, !ro, risk.equals("dangerous"))) {
+            out.put("result", "USER_DENIED: the user refused this action. Do not retry it; continue and give the complete final answer.");
+            ui.stepDone(st, false, "נדחה על ידך", null);
+            return;
+        }
+        ui.status(cmd.contains("pkg install") || cmd.contains("apt install") ? "מתקין כלים ב-Termux…" : "מריץ ב-Termux…");
+        actions++;
+        Termux.Result r = Termux.run(ctx, cmd, timeout, rootOk);
+        if (!r.error.isEmpty() && r.stdout.isEmpty() && r.stderr.isEmpty()) {
+            out.put("error", r.error + " Tell the user how to connect Termux (Phone Doctor Settings > Termux) if needed; do not retry the same way.");
+            ui.stepDone(st, false, r.error, null);
+            return;
+        }
+        String o = r.stdout + (r.stderr.isEmpty() ? "" : (r.stdout.isEmpty() ? "" : "\n") + "[stderr]\n" + r.stderr)
+            + (r.timedOut ? "\n[timeout after " + timeout + " s: it may still be running in Termux]" : "");
+        o = Shell.clip(o);
+        out.put("exit_code", r.exit);
+        out.put("output", o);
+        if (!r.error.isEmpty()) out.put("note", r.error);
+        ui.stepDone(st, r.exit == 0 && !r.timedOut, o, null);
     }
 
     private void runCommand(JSONObject args, JSONObject out) throws Exception {
@@ -547,17 +589,19 @@ final class Agent {
         int best = 0, bestCount = 0;
         String bestPkg = null;
         StringBuilder cand = new StringBuilder(), user = new StringBuilder();
-        for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
-            String label = String.valueOf(ai.loadLabel(pm));
+        for (ApplicationInfo ai : pm.getInstalledApplications(PackageManager.GET_UNINSTALLED_PACKAGES)) {
+            boolean gone = (ai.flags & ApplicationInfo.FLAG_INSTALLED) == 0;   // removed for this user, record (and maybe data) kept
+            String label = gone ? ai.packageName.substring(ai.packageName.lastIndexOf('.') + 1) : String.valueOf(ai.loadLabel(pm));
             String l = label.toLowerCase(), p = ai.packageName.toLowerCase();
             int sc = (p.equals(ql) || l.equals(ql)) ? 100
                 : (l.contains(ql) || p.contains(ql)) ? 60
                 : (ql.length() >= 4 && (l.contains(ql.substring(0, 4)) || p.contains(ql.substring(0, 4)))) ? 30 : 0;
             if (sc == 0 && qs.length() >= 3 && hebrew(label) == 0) {
-                String ls = skel(label);
-                if (ls.equals(qs)) sc = 80;
+                String ls = skel(label), ps = skel(ai.packageName.substring(ai.packageName.lastIndexOf('.') + 1));
+                if (ls.equals(qs) || ps.equals(qs)) sc = 80;
                 else if (ls.length() >= 3 && (ls.startsWith(qs) || qs.startsWith(ls))) sc = 50;
             }
+            if (gone && sc > 0) label += " [NOT INSTALLED - record kept]";
             boolean sys = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
             if (sc > 0) {
                 cand.append(label).append(" = ").append(ai.packageName).append("\n");
@@ -576,6 +620,20 @@ final class Agent {
             ui.stepDone(st, true, "אין התאמה חד-משמעית. הוחזרה רשימת האפליקציות להמשך זיהוי", null);
             return;
         }
+        try {
+            ApplicationInfo gi = pm.getApplicationInfo(pkg, PackageManager.GET_UNINSTALLED_PACKAGES);
+            if ((gi.flags & ApplicationInfo.FLAG_INSTALLED) == 0) {
+                String data = rootOk ? Shell.run("ls -d /data/data/" + pkg + " 2>&1; du -sh /data/data/" + pkg + " 2>/dev/null", true, 20).out.trim() : "(no root: cannot look)";
+                String res = "== APP " + pkg + "\nINSTALLED FOR THIS USER: NO. Android still keeps its package record (pm list packages -u lists it).\n"
+                    + "app data folder: " + data + "\n"
+                    + "MEANING: the app's APK files are gone (e.g. 'missing metadata' at boot) or it was uninstalled with -k. If the data folder exists, installing the SAME app "
+                    + "(same signer, same or newer version) brings it back WITH its data and login. Do NOT uninstall first and do not clear anything. "
+                    + "Look for its APK (find_files / backups) and offer apk_install; or the store. If it is installed for another user, 'pm install-existing " + pkg + "' restores it.";
+                out.put("result", res);
+                ui.stepDone(st, true, res, null);
+                return;
+            }
+        } catch (Exception ignored) { }
         String report = appReport(pm, pkg);
         out.put("result", report);
         ui.stepDone(st, true, report, null);
@@ -1094,8 +1152,11 @@ final class Agent {
         ui.status("ממתין לבחירה שלך…");
         String ans = ui.choose(qn, clean.toArray(new String[0]));
         if (stop) throw new Stopped();
+        String shownNote = diagShown ? " Your diagnosis was ALREADY shown to the user above the question: do NOT repeat or re-summarize it." : "";
+        diagShown = false;
         out.put("answer", ans == null ? "DISMISSED: the user closed the question without choosing. Treat it as NO / not now. Do NOT ask it again or rephrase it, "
-            + "do not ask another question now; give a short final answer (what was found, the options in one line) and stop." : ans);
+            + "do not ask another question now; reply in one or two short sentences and stop." + shownNote
+            : ans + "." + shownNote + " Act on this choice now; then answer only with what you did and its result.");
         ui.stepDone(st, ans != null, ans == null ? "לא נבחרה תשובה" : "בחרת: " + ans, null);
     }
 
@@ -1338,6 +1399,8 @@ final class Agent {
         sb.append("- device owner (admin_action): ").append(owner ? "yes" : "no").append('\n');
         sb.append("- all-files access: ").append(sdk < 30 || MainActivityHelper.filesOk() ? "yes" : "no (inspect_files may not see other apps' folders)").append('\n');
         sb.append("- notification history: ").append(NotifyService.enabled(ctx) ? "yes" : rootOk ? "can be enabled with root automatically" : "no (user must enable notification access)").append('\n');
+        String tx = Termux.state(ctx, rootOk);
+        sb.append("- Termux (termux_run: Linux tools, pkg install): ").append(tx).append(tx.startsWith("not installed") ? "" : tx.equals("connected") || tx.contains("root") ? " - use it when a Linux tool helps" : " (the user can connect it in Settings > Termux)").append('\n');
         sb.append("- without root the shell runs as this app: it CANNOT pm install/uninstall/clear other apps, force-stop them, or change their permissions.\n");
         return sb.toString();
     }
@@ -1406,6 +1469,11 @@ final class Agent {
             + "Vendor performance lines (PowerHalWrapper amsBoostNotify, mtkpower, BufferQueueDebug, SurfaceFlinger) are boost hints and debug noise, never the cause of a kill.\n"
             + "NO FAKE COMMANDS: never run a setting key, package or component you did not see on the device (e.g. a made-up 'settings put global xyz' or 'pm hide com.app.Something'). "
             + "settings put accepts ANY key silently and pm hide/disable of a made-up name proves nothing: such 'fixes' do nothing and you must not claim they worked.\n"
+            + "QUOTE TIMES AND NUMBERS EXACTLY as a tool printed them (a time from a timeline stays that time); never compute, shift or invent a time.\n"
+            + "AN APP THAT 'DISAPPEARED': check pm list packages -u (record kept) and the data folder (/data/data/<pkg>). If the record or data is kept, "
+            + "reinstalling the same app restores it with its data and login: say so, never claim the user must log in again without checking.\n"
+            + "TERMUX: when termux_run is available, use it for Linux tools Android lacks (python, curl, wget, git, ffmpeg, sqlite3, jq, file, unzip, 7z, binwalk...). "
+            + "If a tool is missing, install it in the same call: 'pkg install -y <name>' (risk=modifies). Android system commands stay in run_command.\n"
             + "APP NAMES IN HEBREW: users often write an English app name in Hebrew letters (ליברפודס = LibrePods, ווטסאפ = WhatsApp, טלגרם = Telegram, כרום = Chrome, מיקרוסופט לאנצ'ר = Microsoft Launcher). "
             + "Transliterate it to English, or match its letters to an English name (ל=L, ב=B/V, ר=R, פ=P/F, ד=D, ס=S...), and look it up on the device (inspect_app does this matching; or pm list packages / app labels). "
             + "Only if nothing matches, ask which app with ask_user buttons listing the closest candidates.\n"
@@ -1516,6 +1584,13 @@ final class Agent {
         b.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", system()))));
         b.put("contents", contents);
         JSONArray d = new JSONArray();
+        d.put(fn("termux_run", "Run a bash script inside Termux (full Linux: apt/pkg, python, curl, git, ffmpeg, sqlite3, jq, file, unzip...). "
+                + "Use it for tools Android lacks; if one is missing, install it with 'pkg install -y <name>' in the same call. Not for Android system commands (pm, dumpsys, settings): use run_command for those.",
+            new String[][]{{"command", "string", "bash script, run in Termux's home folder"},
+                {"purpose", "string", "One short Hebrew sentence: what and why. Shown to the user."},
+                {"risk", "string", "read_only, modifies (installing packages, writing files) or dangerous."},
+                {"timeout_sec", "number", "Optional, 10-600 (default 120; pkg install may need 300)."}},
+            new String[]{"command", "purpose", "risk"}));
         d.put(fn("run_command", "Run a shell script on the phone in a hidden terminal. Combine MANY commands in one call. Returns exit_code and output.",
             new String[][]{{"command", "string", "Shell script (sh); several commands separated by newlines or ;"},
                 {"root", "boolean", "true to run as root via su."},

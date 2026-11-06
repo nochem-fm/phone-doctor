@@ -325,6 +325,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        if (code == REQ_TERMUX) {
+            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) connectTermux();
+            else toast("בלי ההרשאה Phone Doctor לא יכול להריץ פקודות ב-Termux");
+            return;
+        }
         if (code == REQ_MIC) {
             if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) onMic();
             else toast("בלי הרשאת מיקרופון אי אפשר להכתיב");
@@ -843,6 +848,68 @@ public class MainActivity extends Activity {
     }
 
     boolean adbOpen, provOpen;
+    static final int REQ_TERMUX = 91;
+
+    /** Termux: state, one "connect" button that does every step it can, and a test. */
+    View termuxBlock() {
+        LinearLayout b = vert();
+        boolean inst = Termux.installed(this);
+        String state = !inst ? "לא מותקן"
+            : Termux.permitted(this) && prefs.getBoolean("termux_ok", false) ? "\u2713 מחובר"
+            : prefs.getBoolean("root", false) ? "זמין דרך root (אפשר גם לחבר)" : "מותקן, לא מחובר";
+        b.addView(note("כשהוא מחובר, הסוכן יכול להשתמש בכלי לינוקס שאין באנדרואיד (python, curl, git, ffmpeg, sqlite3 ועוד), ולהתקין לבד כלי שחסר לו עם pkg install. "
+            + "כל התקנה ופקודה שמשנה משהו מחכה לאישור שלך."));
+        TextView stt = tv("מצב: " + state, 14, TXT);
+        stt.setPadding(0, dp(4), 0, dp(8));
+        b.addView(stt);
+        if (!inst) {
+            b.addView(row("התקן את Termux (F-Droid)", "הגרסה מ-Google Play ישנה ולא מתאימה", new Runnable() {
+                public void run() { openUrl("https://f-droid.org/packages/com.termux/"); }
+            }));
+            return b;
+        }
+        b.addView(row("חבר את Termux", "הרשאה + הגדרת allow-external-apps + בדיקה", new Runnable() { public void run() { connectTermux(); } }));
+        return b;
+    }
+
+    void connectTermux() {
+        if (!Termux.permitted(this)) {   // 1. the runtime permission
+            requestPermissions(new String[]{Termux.PERM}, REQ_TERMUX);
+            return;
+        }
+        toast("מחבר את Termux…");
+        new Thread(new Runnable() {
+            public void run() {
+                String fix = prefs.getBoolean("root", false) ? Termux.enableExternalApps() : null;   // 2. with root: set allow-external-apps ourselves
+                String err;
+                try {
+                    Termux.Result r = Termux.viaIntent(MainActivity.this, "echo PD_OK; uname -m", 25);   // 3. test the real path
+                    err = r.stdout.contains("PD_OK") ? "" : r.timedOut ? "timeout" : (r.error + " " + r.stderr).trim();
+                } catch (Exception e) { err = String.valueOf(e.getMessage()); }
+                final String fe = err, ff = fix;
+                prefs.edit().putBoolean("termux_ok", fe.isEmpty()).apply();
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (fe.isEmpty()) { toast("Termux מחובר"); showSettings(); return; }
+                        String cmd = "mkdir -p ~/.termux && echo \"allow-external-apps = true\" >> ~/.termux/termux.properties && termux-reload-settings";
+                        String msg = (ff != null && !ff.isEmpty() ? "ההגדרה האוטומטית נכשלה: " + ff + "\n\n" : "")
+                            + "Termux לא ענה. בדרך כלל חסרה הגדרה אחת בתוך Termux:\n\n1. פתח את Termux (בפעם הראשונה הוא מסיים התקנה).\n2. הדבק בו את השורה הזו ולחץ Enter:\n\n"
+                            + cmd + "\n\n3. חזור ולחץ שוב 'חבר את Termux'."
+                            + (prefs.getBoolean("root", false) ? "\n\nגם בלי זה, הסוכן יכול להריץ פקודות ב-Termux דרך root." : "");
+                        final String c2 = cmd;
+                        new AlertDialog.Builder(MainActivity.this, dlg()).setTitle("חיבור Termux").setMessage(msg)
+                            .setPositiveButton("העתק ופתח את Termux", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int w) {
+                                    ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("termux", c2));
+                                    Intent li = getPackageManager().getLaunchIntentForPackage(Termux.PKG);
+                                    if (li != null) startActivity(li);
+                                }
+                            }).setNegativeButton("סגור", null).show();
+                    }
+                });
+            }
+        }).start();
+    }
 
     /** Keys for Claude, OpenAI and other providers. Their models then appear in the model lists as "Claude · model". */
     View providersBlock() {
@@ -2511,6 +2578,10 @@ public class MainActivity extends Activity {
                 });
             }
         }), bl);
+
+        // --- Termux
+        c = card(list, "Termux (כלי לינוקס)");
+        c.addView(termuxBlock());
 
         // --- other AI companies (optional)
         c = card(list, "ספקי AI נוספים (לא חובה)");
