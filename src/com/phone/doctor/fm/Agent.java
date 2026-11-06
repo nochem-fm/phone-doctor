@@ -228,6 +228,7 @@ final class Agent {
     }
 
     private boolean diagShown;
+    private String shownModel = "";
 
     private boolean lazy(String answer, int toolsUsed, String userText) {
         if (!isTask(userText) || answer.isEmpty()) return false;
@@ -1470,7 +1471,8 @@ final class Agent {
         ui.status("מחפש בגוגל: " + q);
         actions++;
         JSONObject b = new JSONObject();
-        b.put("contents", new JSONArray().put(msg("user", q + "\n\nAnswer concisely and practically for Android. Include exact adb/shell commands when relevant.")));
+        b.put("contents", new JSONArray().put(msg("user", q + "\n\nAnswer with concrete facts only: exact package names, official websites, GitHub repositories, "
+            + "direct download URLs, version numbers, exact commands. No generic advice, no adb tutorials unless asked.")));
         b.put("tools", new JSONArray().put(new JSONObject().put("google_search", new JSONObject())));
         JSONObject resp = post(b);
         StringBuilder sb = new StringBuilder();
@@ -1532,8 +1534,14 @@ final class Agent {
             + "1) find the package / project (web_search); 2) get a DIRECT APK link from an official source: F-Droid: fetch_url https://f-droid.org/api/v1/packages/<package> -> suggestedVersionCode -> "
             + "https://f-droid.org/repo/<package>_<versionCode>.apk ; GitHub: fetch_url https://api.github.com/repos/<owner>/<repo>/releases/latest -> assets[].browser_download_url "
             + "(pick the asset for this phone's ABI " + java.util.Arrays.toString(Build.SUPPORTED_ABIS) + " or universal); or the vendor's own download page (fetch_url lists its APK links); "
+            + "IzzyOnDroid: the same API at https://apt.izzysoft.de/fdroid/api/v1/packages/<package> -> https://apt.izzysoft.de/fdroid/repo/<package>_<versionCode>.apk ; "
+            + "GitHub search: fetch_url https://api.github.com/search/repositories?q=<name>+android ; "
             + "3) download_file; 4) check the result (package, version, ABI, minSdk; a tiny HTML file means a wrong link); 5) apk_install. "
-            + "Prefer official sources (F-Droid, the project's GitHub, the vendor); never random mirror sites; give the user the SHA-256. Do not give up after one failed link: try the next source.\n"
+            + "NEVER guess a versionCode or a file URL: read it from the API/page. Try ALL the official sources (F-Droid, IzzyOnDroid, GitHub, the vendor) before giving up. "
+            + "If none has the app, do NOT stop with 'not found': use ask_user: 'לא מצאתי את האפליקציה במקורות רשמיים. לחפש גם באתרי הורדת APK (כמו APKMirror, APKPure, Uptodown)? "
+            + "זה פחות בטוח: הקובץ לא מגיע ישירות מהמפתח ועלול להיות שונה או מזיק.' with options 'כן, חפש|לא'. If yes: prefer APKMirror (it checks signatures), then Uptodown/APKPure; "
+            + "fetch their search/app pages, follow to the real .apk download (not .xapk/.apks bundles unless nothing else), download, and show the user package, signer and SHA-256. "
+            + "Give the user the SHA-256 in every case.\n"
             + "INTERNET FILTERS: many users are behind NetFree / Rimon / Etrog. When a fetch or download is blocked by the filter (the tool says BLOCKED BY THE INTERNET FILTER, "
             + "or a block page / HTTP 418 / 403 comes back instead of the file), say exactly that: the filter blocks it. Do not call it a broken link, a phone problem or a missing file.\n"
             + "RUNNING PROGRAMS: this app targets SDK 28, so a binary downloaded with download_file executable=true into " + ctx.getFilesDir() + "/bin can be run directly from run_command "
@@ -1826,7 +1834,10 @@ final class Agent {
                 ErrorLog.add("chat", m, 0, String.valueOf(e));
                 throw e;
             }
-            if (code < 400) return new JSONObject(s);
+            if (code < 400) {
+                if (body.has("tools") && !m.equals(shownModel)) { shownModel = m; ui.model(m); }   // the model that actually answered
+                return new JSONObject(s);
+            }
             ErrorLog.add(body.has("tools") ? "chat" : "summary", m, code, s);
             String msg = s;
             try { msg = new JSONObject(s).getJSONObject("error").getString("message"); } catch (Exception ignored) { }
@@ -1929,7 +1940,7 @@ final class Agent {
         List<String> usable = new ArrayList<String>();
         for (String m : all) {
             String p = Providers.providerOf(m);
-            if (p == null ? !key.isEmpty() : !Providers.key(p).isEmpty()) usable.add(m);
+            if (p == null ? !key.isEmpty() && Models.isChat(m) : !Providers.key(p).isEmpty()) usable.add(m);
         }
         return usable.isEmpty() ? all : usable;
     }
@@ -1990,7 +2001,6 @@ final class Agent {
         if (!use.equals(lastModel)) {
             if (!lastModel.isEmpty()) ui.status("עובר למודל " + use);
             lastModel = use;
-            ui.model(use);
         }
         Quotas.sent(use);
         quotaCheck();

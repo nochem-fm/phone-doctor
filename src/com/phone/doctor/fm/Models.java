@@ -34,11 +34,19 @@ final class Models {
             boolean gen = false;
             if (me != null) for (int j = 0; j < me.length(); j++) if ("generateContent".equals(me.optString(j))) gen = true;
             if (!gen || !n.startsWith("gemini")) continue;
-            if (n.contains("tts") || n.contains("image") || n.contains("live") || n.contains("audio")
-                || n.contains("embedding") || n.contains("robotics") || n.contains("computer-use")) continue;
+            if (!isChat(n)) continue;
             out.add(n);
         }
         Collections.sort(out);
         return out;
+    }
+
+    /** Gemini models that can chat and call tools (not speech, image, embedding, transcription or experimental codenames). */
+    static boolean isChat(String n) {
+        n = n.toLowerCase();
+        String[] no = {"tts", "image", "live", "audio", "embedding", "robotics", "computer-use", "transcribe", "banana", "imagen", "veo",
+            "lyria", "aqa", "learnlm", "gemma", "customtools", "argon"};
+        for (String x : no) if (n.contains(x)) return false;
+        return true;
     }
 }
