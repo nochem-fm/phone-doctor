@@ -51,6 +51,27 @@ final class Web {
         + "and that they can ask the filter to open it (NetFree: the request-to-open form on the block page or netfree.link; Rimon/Etrog: their support), "
         + "or get the file another way and you will install it from the phone. You may try one other official source; do not keep retrying.";
 
+    /** {download/APK links, other links} of an HTML page; also data-url / data-href buttons (Uptodown and others). */
+    static String[] links(String body, String base) {
+        Set<String> links = new LinkedHashSet<String>();
+        Matcher m = Pattern.compile("(?:href|data-url|data-href|data-link)\\s*=\\s*[\"']([^\"'#]+)[\"']", Pattern.CASE_INSENSITIVE).matcher(body);
+        while (m.find() && links.size() < 400) {
+            String h = m.group(1).replace("&amp;", "&").trim();
+            if (h.startsWith("javascript:") || h.startsWith("mailto:")) continue;
+            try { links.add(new URL(new URL(base), h).toString()); } catch (Exception ignored) { }
+        }
+        StringBuilder dl = new StringBuilder(), other = new StringBuilder();
+        for (String l : links) {
+            String x = l.toLowerCase();
+            boolean d = x.contains(".apk") || x.contains("download") || x.contains("/dl/") || x.contains("/dwn/") || x.contains("key=")
+                || x.contains("d.apkpure") || x.contains("releases/download");
+            boolean asset = x.matches(".*\\.(css|js|png|jpg|jpeg|svg|webp|ico|woff2?|ttf)(\\?.*)?$");
+            if (asset) continue;
+            (d ? dl : other).append(l).append('\n');
+        }
+        return new String[]{dl.toString(), other.toString()};
+    }
+
     /** Text of a page or API (JSON as is; HTML as text plus its links). */
     static String fetch(String url, int max) throws Exception {
         HttpURLConnection c = get(url, 30000);
@@ -69,18 +90,12 @@ final class Web {
         if (blk != null) sb.append(String.format(BLOCK_NOTE, blk)).append('\n');
         sb.append('\n');
         if (type.contains("html")) {
-            Set<String> links = new LinkedHashSet<String>();
-            Matcher m = Pattern.compile("href\\s*=\\s*[\"']([^\"'#]+)[\"']", Pattern.CASE_INSENSITIVE).matcher(body);
-            while (m.find() && links.size() < 300) {
-                try { links.add(new URL(new URL(finalUrl), m.group(1).replace("&amp;", "&")).toString()); } catch (Exception ignored) { }
-            }
+            String[] lk = links(body, finalUrl);
             String text = body.replaceAll("(?is)<(script|style)[^>]*>.*?</\\1>", " ").replaceAll("(?s)<[^>]+>", " ")
                 .replace("&nbsp;", " ").replace("&amp;", "&").replaceAll("[ \\t\\x0B\\f\\r]+", " ").replaceAll("\\n\\s*\\n+", "\n");
-            StringBuilder apk = new StringBuilder(), other = new StringBuilder();
-            for (String l : links) (l.toLowerCase().contains(".apk") ? apk : other).append(l).append('\n');
+            if (lk[0].length() > 0) sb.append("DOWNLOAD / APK LINKS (try these first):\n").append(lk[0]).append('\n');
             sb.append(text.trim().length() > max / 2 ? text.trim().substring(0, max / 2) : text.trim());
-            if (apk.length() > 0) sb.append("\n\nAPK LINKS:\n").append(apk);
-            sb.append("\nLINKS:\n").append(other.length() > max / 3 ? other.substring(0, max / 3) : other);
+            sb.append("\nOTHER LINKS:\n").append(lk[1].length() > max / 3 ? lk[1].substring(0, max / 3) : lk[1]);
         } else {
             sb.append(body);
         }
@@ -88,7 +103,7 @@ final class Web {
         return s.length() > max ? s.substring(0, max) + "\n...[cut at " + max + " chars]" : s;
     }
 
-    static final class Download { String path, type, sha256, url, blocked; long size; int code; }
+    static final class Download { String path, type, sha256, url, blocked, page; long size; int code; }
 
     /** Downloads into the app's own folder (readable by the installer). Max 400 MB. */
     static Download download(String url, String name, boolean executable, Agent.Stopper stop) throws Exception {
@@ -102,6 +117,19 @@ final class Web {
             try { InputStream es = c.getErrorStream(); if (es != null) body = Agent.read(es); } catch (Exception ignored) { }
             d.blocked = filterBlock(d.code, d.url, body.length() > 30000 ? body.substring(0, 30000) : body);
             c.disconnect();
+            return d;
+        }
+        if (d.type.contains("text/html")) {   // a web page, not the file: do not save it, hand back its download links
+            String body = "";
+            try { body = Agent.read(c.getInputStream()); } catch (Exception ignored) { }
+            c.disconnect();
+            d.blocked = filterBlock(d.code, d.url, body.length() > 30000 ? body.substring(0, 30000) : body);
+            if (d.blocked == null) {
+                String[] lk = links(body, d.url);
+                d.page = "NOT A FILE: " + d.url + " is a web page (text/html), nothing was saved. Use one of its download links below "
+                    + "(often a second page leads to the final file; open it with fetch_url), or another source.\n"
+                    + (lk[0].isEmpty() ? "No download links on this page (it may need JavaScript or be protected): try another source." : "DOWNLOAD LINKS ON THE PAGE:\n" + (lk[0].length() > 6000 ? lk[0].substring(0, 6000) : lk[0]));
+            }
             return d;
         }
         if (name == null || name.trim().isEmpty()) {

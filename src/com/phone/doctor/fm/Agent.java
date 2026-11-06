@@ -464,6 +464,11 @@ final class Agent {
                 ui.stepDone(st, false, "חסום על ידי הסינון: " + d.blocked, null);
                 return;
             }
+            if (d.page != null) {
+                out.put("error", d.page);
+                ui.stepDone(st, false, "זה דף אינטרנט ולא קובץ. מחפש בו את קישור ההורדה", null);
+                return;
+            }
             if (d.path == null) {
                 out.put("error", "HTTP " + d.code + " (" + d.type + ") from " + d.url);
                 ui.stepDone(st, false, "ההורדה נכשלה: HTTP " + d.code, null);
@@ -1539,8 +1544,11 @@ final class Agent {
             + "3) download_file; 4) check the result (package, version, ABI, minSdk; a tiny HTML file means a wrong link); 5) apk_install. "
             + "NEVER guess a versionCode or a file URL: read it from the API/page. Try ALL the official sources (F-Droid, IzzyOnDroid, GitHub, the vendor) before giving up. "
             + "If none has the app, do NOT stop with 'not found': use ask_user: 'לא מצאתי את האפליקציה במקורות רשמיים. לחפש גם באתרי הורדת APK (כמו APKMirror, APKPure, Uptodown)? "
-            + "זה פחות בטוח: הקובץ לא מגיע ישירות מהמפתח ועלול להיות שונה או מזיק.' with options 'כן, חפש|לא'. If yes: prefer APKMirror (it checks signatures), then Uptodown/APKPure; "
-            + "fetch their search/app pages, follow to the real .apk download (not .xapk/.apks bundles unless nothing else), download, and show the user package, signer and SHA-256. "
+            + "זה פחות בטוח: הקובץ לא מגיע ישירות מהמפתח ועלול להיות שונה או מזיק.' with options 'כן, חפש|לא'. If yes, FIRST find the exact package name, then: "
+            + "APKPure direct file: download_file https://d.apkpure.com/b/APK/<package>?version=latest (it may come as an .xapk bundle: apk_install installs bundles too); "
+            + "Uptodown: fetch_url https://<app>.en.uptodown.com/android/download and use its dw.uptodown.com link; APKMirror: app page -> variant page -> its 'download' link -> final link "
+            + "(it may block bots). download_file never saves a web page: when it answers NOT A FILE, follow the links it lists. "
+            + "Show the user the package, signer and SHA-256 of what you install. "
             + "Give the user the SHA-256 in every case.\n"
             + "INTERNET FILTERS: many users are behind NetFree / Rimon / Etrog. When a fetch or download is blocked by the filter (the tool says BLOCKED BY THE INTERNET FILTER, "
             + "or a block page / HTTP 418 / 403 comes back instead of the file), say exactly that: the filter blocks it. Do not call it a broken link, a phone problem or a missing file.\n"
