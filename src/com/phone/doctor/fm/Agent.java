@@ -394,6 +394,8 @@ final class Agent {
                 case "read_output": out.put("result", Shell.Outputs.read(args.optString("output_id"), args.optString("grep", ""), Math.max(1, args.optInt("from_line", 1)), Math.max(1, Math.min(400, args.optInt("lines", 120))))); break;
                 case "run_background": runBackground(args, out); break;
                 case "termux_run": termuxRun(args, out); break;
+                case "fetch_url": fetchUrl(args, out); break;
+                case "download_file": downloadFile(args, out); break;
                 case "app_settings_action": appSettingsAction(args, out); break;
                 case "app_uninstall": appUninstall(args, out); break;
                 case "find_files": findFiles(args, out); break;
@@ -421,6 +423,58 @@ final class Agent {
         if (auto && !force && !risk.equals("dangerous") && !Safety.sensitive(cmd)) return true;
         ui.status("ממתין לאישור שלך…");
         return ui.confirm(purpose, cmd, root, risk);
+    }
+
+    interface Stopper { boolean stopped(); }
+
+    private void fetchUrl(JSONObject a, JSONObject out) throws Exception {
+        String url = a.getString("url").trim();
+        int max = Math.max(2000, Math.min(40000, a.optInt("max_chars", 15000)));
+        int st = ui.step("search", "קורא: " + url, "");
+        ui.status("קורא דף אינטרנט…");
+        actions++;
+        if (!url.matches("(?i)https?://.+")) { out.put("error", "only http(s) URLs"); ui.stepDone(st, false, "כתובת לא תקינה", null); return; }
+        try {
+            String s = Web.fetch(url, max);
+            out.put("result", s);
+            ui.stepDone(st, true, s, null);
+        } catch (Exception e) {
+            out.put("error", String.valueOf(e));
+            ui.stepDone(st, false, String.valueOf(e), null);
+        }
+    }
+
+    private void downloadFile(JSONObject a, JSONObject out) throws Exception {
+        String url = a.getString("url").trim();
+        String purpose = a.optString("purpose", "הורדת קובץ");
+        int st = ui.step("cmd", purpose, "download " + url);
+        if (!url.matches("(?i)https?://.+")) { out.put("error", "only http(s) URLs"); ui.stepDone(st, false, "כתובת לא תקינה", null); return; }
+        if (!allow(purpose, "הורדה מ:\n" + url, false, "modifies", true, false)) {
+            out.put("result", "USER_DENIED: the user refused the download. Do not retry it.");
+            ui.stepDone(st, false, "נדחה על ידך", null);
+            return;
+        }
+        ui.status("מוריד…");
+        actions++;
+        try {
+            Web.Download d = Web.download(url, a.optString("file_name", null), new Stopper() { public boolean stopped() { return stop; } });
+            if (d.path == null) {
+                out.put("error", "HTTP " + d.code + " (" + d.type + ") from " + d.url);
+                ui.stepDone(st, false, "ההורדה נכשלה: HTTP " + d.code, null);
+                return;
+            }
+            StringBuilder sb = new StringBuilder("saved: " + d.path + "\nsize: " + (d.size / 1024) + " KB\ntype: " + d.type + "\nfrom: " + d.url + "\nSHA-256: " + d.sha256);
+            if (d.size < 4096 && (d.type.contains("html") || d.type.contains("text"))) sb.append("\nWARNING: tiny text/HTML file - this is probably an error or landing page, not the real file.");
+            if (d.path.toLowerCase().endsWith(".apk") || d.type.contains("android.package")) {
+                try { sb.append("\n\n").append(ApkTools.info(ctx, d.path, rootOk)); } catch (Exception e) { sb.append("\nAPK check failed: ").append(e.getMessage()); }
+            }
+            out.put("result", sb.toString());
+            ui.stepDone(st, true, sb.toString(), null);
+        } catch (Exception e) {
+            if (stop) throw new Stopped();
+            out.put("error", String.valueOf(e));
+            ui.stepDone(st, false, String.valueOf(e), null);
+        }
     }
 
     private void termuxRun(JSONObject args, JSONObject out) throws Exception {
@@ -1469,6 +1523,12 @@ final class Agent {
             + "Vendor performance lines (PowerHalWrapper amsBoostNotify, mtkpower, BufferQueueDebug, SurfaceFlinger) are boost hints and debug noise, never the cause of a kill.\n"
             + "NO FAKE COMMANDS: never run a setting key, package or component you did not see on the device (e.g. a made-up 'settings put global xyz' or 'pm hide com.app.Something'). "
             + "settings put accepts ANY key silently and pm hide/disable of a made-up name proves nothing: such 'fixes' do nothing and you must not claim they worked.\n"
+            + "INSTALLING AN APP FROM THE INTERNET (no store, no browser): you can do it end to end: "
+            + "1) find the package / project (web_search); 2) get a DIRECT APK link from an official source: F-Droid: fetch_url https://f-droid.org/api/v1/packages/<package> -> suggestedVersionCode -> "
+            + "https://f-droid.org/repo/<package>_<versionCode>.apk ; GitHub: fetch_url https://api.github.com/repos/<owner>/<repo>/releases/latest -> assets[].browser_download_url "
+            + "(pick the asset for this phone's ABI " + java.util.Arrays.toString(Build.SUPPORTED_ABIS) + " or universal); or the vendor's own download page (fetch_url lists its APK links); "
+            + "3) download_file; 4) check the result (package, version, ABI, minSdk; a tiny HTML file means a wrong link); 5) apk_install. "
+            + "Prefer official sources (F-Droid, the project's GitHub, the vendor); never random mirror sites; give the user the SHA-256. Do not give up after one failed link: try the next source.\n"
             + "QUOTE TIMES AND NUMBERS EXACTLY as a tool printed them (a time from a timeline stays that time); never compute, shift or invent a time.\n"
             + "AN APP THAT 'DISAPPEARED': check pm list packages -u (record kept) and the data folder (/data/data/<pkg>). If the record or data is kept, "
             + "reinstalling the same app restores it with its data and login: say so, never claim the user must log in again without checking.\n"
@@ -1623,6 +1683,11 @@ final class Agent {
                 {"purpose", "string", "Short Hebrew sentence."}}, "action", "package", "purpose"));
         d.put(fn("web_search", "Search Google for commands, known issues and device-specific fixes.",
             new String[][]{{"query", "string", "Search query."}}, "query"));
+        d.put(fn("fetch_url", "Read a web page or a JSON API directly (F-Droid / GitHub APIs, download pages). HTML comes back as text with its links, APK links listed first.",
+            new String[][]{{"url", "string", "http(s) URL"}, {"max_chars", "number", "Optional, default 15000, max 40000."}}, "url"));
+        d.put(fn("download_file", "Download a file (an APK, an archive...) from a direct URL into the app's folder. Returns its path, size and SHA-256; for an APK also package, version and whether it fits this phone. Then use apk_install with the path.",
+            new String[][]{{"url", "string", "Direct download URL"}, {"file_name", "string", "Optional name to save as"},
+                {"purpose", "string", "One short Hebrew sentence. Shown to the user."}}, "url", "purpose"));
         d.put(fn("remember", "Save something to this phone's permanent memory, used in every future chat. kind=fact: a stable device fact (ROM/skin, root type, a quirk, an app that is known to misbehave). kind=recipe: a fix that was VERIFIED to work, as 'problem -> exact fix'. Never save personal data (names, numbers, messages, passwords).",
             new String[][]{{"kind", "string", "fact or recipe"}, {"text", "string", "Short, specific, max 300 chars."}}, "kind", "text"));
         d.put(fn("forget", "Remove memory entries that contain this text (wrong or outdated).",
